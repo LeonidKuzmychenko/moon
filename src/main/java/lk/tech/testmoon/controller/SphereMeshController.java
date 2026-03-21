@@ -19,6 +19,6 @@ public class SphereMeshController {
 
     @GetMapping("/sphere")
     public SphereMeshDto getSphere() {
-        return sphereMeshService.generate(64, 64, 1f);
+        return sphereMeshService.loadFromGlb();
     }
 }

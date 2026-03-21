@@ -60,146 +60,114 @@
     // -----------------------------
     // fetch geometry
     // -----------------------------
-    const data = await fetch(API_URL).then(r => r.json());
+    const response = await fetch(API_URL);
+    if (!response.ok) {
+        throw new Error(`Sphere API failed: ${response.status}`);
+    }
+    const data = await response.json();
 
     // -----------------------------
-    // validation
+    // validation + normalization
     // -----------------------------
-    if (!data.positions || !data.indices) {
-        throw new Error('Invalid mesh data');
+    const toJsArray = (value) => {
+        if (Array.isArray(value)) return value;
+        if (ArrayBuffer.isView(value)) return Array.from(value);
+        return null;
+    };
+
+    function normalizeMeshData(payload) {
+        const positions = toJsArray(payload?.positions ?? payload?.vertices);
+        const quads = toJsArray(payload?.quads ?? payload?.faces);
+        const normals = toJsArray(payload?.normals ?? []);
+
+        if (!positions || !quads) {
+            const keys = payload && typeof payload === 'object'
+                ? Object.keys(payload).join(', ')
+                : String(payload);
+            throw new Error(`Invalid mesh data: expected positions/quads, got keys: ${keys}`);
+        }
+        if (positions.length % 3 !== 0) {
+            throw new Error(`Invalid positions length: ${positions.length}`);
+        }
+        if (quads.length % 4 !== 0) {
+            throw new Error(`Invalid quads length: ${quads.length}`);
+        }
+        if (normals.length > 0 && normals.length !== positions.length) {
+            throw new Error(
+                `Invalid normals length: positions=${positions.length}, normals=${normals.length}`
+            );
+        }
+
+        return { positions, quads, normals };
     }
 
-    // -----------------------------
-    // geometry
-    // -----------------------------
+    const meshData = normalizeMeshData(data);
+
+    function buildTrianglesFromQuads(quads) {
+        if (quads.length % 4 !== 0) {
+            throw new Error('Invalid quads array');
+        }
+        const indices = [];
+        const quadIds = [];
+
+        for (let i = 0; i < quads.length; i += 4) {
+            const q = i / 4;
+            const a = quads[i];
+            const b = quads[i + 1];
+            const c = quads[i + 2];
+            const d = quads[i + 3];
+
+            indices.push(a, b, c);
+            quadIds.push(q);
+
+            if (c !== d) {
+                indices.push(a, c, d);
+                quadIds.push(q);
+            }
+        }
+        return { indices, quadIds };
+    }
+
+    const { indices, quadIds } = buildTrianglesFromQuads(meshData.quads);
+
     let geometry = new THREE.BufferGeometry();
 
     geometry.setAttribute(
         'position',
-        new THREE.BufferAttribute(new Float32Array(data.positions), 3)
+        new THREE.BufferAttribute(new Float32Array(meshData.positions), 3)
     );
 
-    if (data.normals && data.normals.length > 0) {
+    if (meshData.normals.length > 0) {
         geometry.setAttribute(
             'normal',
-            new THREE.BufferAttribute(new Float32Array(data.normals), 3)
+            new THREE.BufferAttribute(new Float32Array(meshData.normals), 3)
         );
     } else {
         geometry.computeVertexNormals();
     }
 
-    geometry.setIndex(data.indices);
-
-    // 🔴 КЛЮЧЕВОЕ: разворачиваем
+    geometry.setIndex(indices);
     geometry = geometry.toNonIndexed();
-
-    // -----------------------------
-    // UV buffer (обязательно заранее)
-    // -----------------------------
     const vertexCount = geometry.attributes.position.count;
-    const uvArray = new Float32Array(vertexCount * 2);
-
-    // -----------------------------
-    // TILE → UV (если есть tileIds)
-    // -----------------------------
-    if (data.tileIds && data.tileIds.length > 0) {
-
-        const triangleCount = vertexCount / 3;
-        const tileCount = Math.max(...data.tileIds) + 1;
-
-        // atlas grid
-        const gridSize = Math.ceil(Math.sqrt(tileCount));
-
-        function getTileUV(tileId) {
-            const x = tileId % gridSize;
-            const y = Math.floor(tileId / gridSize);
-
-            const size = 1 / gridSize;
-
-            return {
-                u0: x * size,
-                v0: y * size,
-                u1: (x + 1) * size,
-                v1: (y + 1) * size
-            };
-        }
-
-        for (let t = 0; t < triangleCount; t++) {
-            const tileId = data.tileIds[t];
-            const rect = getTileUV(tileId);
-
-            const base = t * 3;
-
-            // triangle A / B автоматически корректно ложатся
-            setUV(base + 0, rect.u0, rect.v0);
-            setUV(base + 1, rect.u1, rect.v0);
-            setUV(base + 2, rect.u0, rect.v1);
-        }
-
-        console.log('UV assigned for tiles');
-
-    } else {
-        console.log('No tileIds → fallback UV');
-
-        // fallback UV
-        for (let i = 0; i < vertexCount; i++) {
-            setUV(i, 0, 0);
-        }
+    const triangleCount = vertexCount / 3;
+    if (triangleCount !== quadIds.length) {
+        throw new Error(`quadIds length mismatch: triangles=${triangleCount}, quadIds=${quadIds.length}`);
     }
 
-    function setUV(index, u, v) {
-        uvArray[index * 2] = u;
-        uvArray[index * 2 + 1] = v;
-    }
-
-    geometry.setAttribute('uv', new THREE.BufferAttribute(uvArray, 2));
-
-    // -----------------------------
-    // ATLAS (если есть картинки)
-    // -----------------------------
-    let material;
-
-    try {
-        const canvas = document.createElement('canvas');
-        const size = 1024;
-
-        canvas.width = size;
-        canvas.height = size;
-
-        const ctx = canvas.getContext('2d');
-
-        // пример: закрасим разными цветами
-        const tileCount = data.tileIds ? Math.max(...data.tileIds) + 1 : 0;
-        const gridSize = Math.ceil(Math.sqrt(tileCount));
-
-        for (let i = 0; i < tileCount; i++) {
-            const x = i % gridSize;
-            const y = Math.floor(i / gridSize);
-
-            const cell = size / gridSize;
-
-            ctx.fillStyle = `hsl(${(i * 37) % 360}, 70%, 50%)`;
-            ctx.fillRect(x * cell, y * cell, cell, cell);
+    const colorArray = new Float32Array(vertexCount * 3);
+    for (let t = 0; t < triangleCount; t++) {
+        const quadId = quadIds[t];
+        const color = new THREE.Color().setHSL((quadId * 37 % 360) / 360, 0.7, 0.5);
+        for (let local = 0; local < 3; local++) {
+            const v = t * 3 + local;
+            colorArray[v * 3] = color.r;
+            colorArray[v * 3 + 1] = color.g;
+            colorArray[v * 3 + 2] = color.b;
         }
-
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.minFilter = THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.generateMipmaps = false;
-
-        material = new THREE.MeshBasicMaterial({
-            map: texture
-        });
-
-        console.log('Atlas created');
-
-    } catch (e) {
-        console.warn('Atlas failed → fallback color');
-
-        material = new THREE.MeshBasicMaterial({
-            color: 0x00ff66
-        });
     }
+    geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
+
+    const material = new THREE.MeshBasicMaterial({ vertexColors: true });
 
     // -----------------------------
     // mesh
