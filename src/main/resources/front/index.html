@@ -11,9 +11,25 @@
             overflow: hidden;
             background: #000;
         }
+        #area-tooltip {
+            position: fixed;
+            left: 0;
+            top: 0;
+            transform: translate(12px, 12px);
+            padding: 6px 8px;
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            font: 12px/1.2 monospace;
+            pointer-events: none;
+            display: none;
+            z-index: 10;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
     </style>
 </head>
 <body>
+<div id="area-tooltip"></div>
 
 <script type="module">
     import * as THREE from 'https://esm.sh/three@0.160.0';
@@ -79,6 +95,7 @@
         const positions = toJsArray(payload?.positions ?? payload?.vertices);
         const quads = toJsArray(payload?.quads ?? payload?.faces);
         const normals = toJsArray(payload?.normals ?? []);
+        const areaIds = toJsArray(payload?.areaIds ?? payload?.tileIds ?? []);
 
         if (!positions || !quads) {
             const keys = payload && typeof payload === 'object'
@@ -97,38 +114,44 @@
                 `Invalid normals length: positions=${positions.length}, normals=${normals.length}`
             );
         }
+        if (areaIds.length > 0 && areaIds.length !== quads.length / 4) {
+            throw new Error(
+                `Invalid areaIds length: areaIds=${areaIds.length}, quads=${quads.length / 4}`
+            );
+        }
 
-        return { positions, quads, normals };
+        return { positions, quads, normals, areaIds };
     }
 
     const meshData = normalizeMeshData(data);
 
-    function buildTrianglesFromQuads(quads) {
+    function buildTrianglesFromQuads(quads, areaIds) {
         if (quads.length % 4 !== 0) {
             throw new Error('Invalid quads array');
         }
         const indices = [];
-        const quadIds = [];
+        const triangleAreaIds = [];
 
         for (let i = 0; i < quads.length; i += 4) {
             const q = i / 4;
+            const areaId = areaIds.length > 0 ? areaIds[q] : q;
             const a = quads[i];
             const b = quads[i + 1];
             const c = quads[i + 2];
             const d = quads[i + 3];
 
             indices.push(a, b, c);
-            quadIds.push(q);
+            triangleAreaIds.push(areaId);
 
             if (c !== d) {
                 indices.push(a, c, d);
-                quadIds.push(q);
+                triangleAreaIds.push(areaId);
             }
         }
-        return { indices, quadIds };
+        return { indices, triangleAreaIds };
     }
 
-    const { indices, quadIds } = buildTrianglesFromQuads(meshData.quads);
+    const { indices, triangleAreaIds } = buildTrianglesFromQuads(meshData.quads, meshData.areaIds);
 
     let geometry = new THREE.BufferGeometry();
 
@@ -150,14 +173,26 @@
     geometry = geometry.toNonIndexed();
     const vertexCount = geometry.attributes.position.count;
     const triangleCount = vertexCount / 3;
-    if (triangleCount !== quadIds.length) {
-        throw new Error(`quadIds length mismatch: triangles=${triangleCount}, quadIds=${quadIds.length}`);
+    if (triangleCount !== triangleAreaIds.length) {
+        throw new Error(
+            `triangleAreaIds length mismatch: triangles=${triangleCount}, areaIds=${triangleAreaIds.length}`
+        );
     }
 
     const colorArray = new Float32Array(vertexCount * 3);
+    const areaColorMap = new Map();
+    const randomColorForArea = (areaId) => {
+        let color = areaColorMap.get(areaId);
+        if (!color) {
+            color = new THREE.Color(Math.random(), Math.random(), Math.random());
+            areaColorMap.set(areaId, color);
+        }
+        return color;
+    };
+
     for (let t = 0; t < triangleCount; t++) {
-        const quadId = quadIds[t];
-        const color = new THREE.Color().setHSL((quadId * 37 % 360) / 360, 0.7, 0.5);
+        const areaId = triangleAreaIds[t];
+        const color = randomColorForArea(areaId);
         for (let local = 0; local < 3; local++) {
             const v = t * 3 + local;
             colorArray[v * 3] = color.r;
@@ -167,13 +202,38 @@
     }
     geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
 
-    const material = new THREE.MeshBasicMaterial({ vertexColors: true });
+    const material = new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        side: THREE.DoubleSide
+    });
 
     // -----------------------------
     // mesh
     // -----------------------------
     const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
+
+    const tooltip = document.getElementById('area-tooltip');
+    const raycaster = new THREE.Raycaster();
+    const pointer = new THREE.Vector2();
+
+    window.addEventListener('mousemove', (event) => {
+        pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
+        pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(pointer, camera);
+        const hit = raycaster.intersectObject(mesh, false)[0];
+
+        if (!hit || hit.faceIndex == null) {
+            tooltip.style.display = 'none';
+            return;
+        }
+
+        const areaId = triangleAreaIds[hit.faceIndex];
+        tooltip.textContent = `areaId: ${areaId}`;
+        tooltip.style.left = `${event.clientX}px`;
+        tooltip.style.top = `${event.clientY}px`;
+        tooltip.style.display = 'block';
+    });
 
     // -----------------------------
     // camera auto distance

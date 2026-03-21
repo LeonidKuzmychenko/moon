@@ -30,18 +30,41 @@ public class SphereMeshService {
             throw new IllegalStateException("No meshes found in Moon.glb");
         }
 
+        int meshesWithPrimitives = countMeshesWithPrimitives(meshes);
+        /*
+         * В Blender имена объектов (North / South / Sphere) попадают в glTF как node.name,
+         * а meshes[].name часто "Mesh", "Mesh.001" — из‑за этого весь кап считался Sphere
+         * и раскраска шла «по квадратам», а не одним areaId.
+         */
+        Map<Integer, MeshRegion> meshIndexToRegionFromNodes = meshIndexToRegionFromObjectNodes(parsedGlb.root);
+
         List<float[]> positionParts = new ArrayList<>();
         List<float[]> normalParts = new ArrayList<>();
         List<int[]> indexParts = new ArrayList<>();
+        List<MeshRegion> regionPerPart = new ArrayList<>();
         boolean hasAnyNormals = false;
         int totalVertexCount = 0;
 
-        for (JsonNode mesh : meshes) {
+        for (int meshIndex = 0; meshIndex < meshes.size(); meshIndex++) {
+            JsonNode mesh = meshes.get(meshIndex);
             JsonNode primitives = mesh.path("primitives");
-            if (!primitives.isArray()) {
+            if (!primitives.isArray() || primitives.isEmpty()) {
                 continue;
             }
+            MeshRegion meshRegion = meshIndexToRegionFromNodes.get(meshIndex);
+            if (meshRegion == null) {
+                String meshDataName = mesh.path("name").asText("");
+                meshRegion = classifyMeshName(meshDataName, meshIndex, meshesWithPrimitives);
+            }
+
             for (JsonNode primitive : primitives) {
+                int mode = primitive.path("mode").asInt(4);
+                if (mode != 4) {
+                    throw new IllegalStateException(
+                            "Moon.glb primitive mode is not TRIANGLES (mode=" + mode + ")."
+                    );
+                }
+
                 int positionAccessor = primitive.path("attributes").path("POSITION").asInt(-1);
                 int normalAccessor = primitive.path("attributes").path("NORMAL").asInt(-1);
                 int indexAccessor = primitive.path("indices").asInt(-1);
@@ -68,6 +91,7 @@ public class SphereMeshService {
                 positionParts.add(positions);
                 normalParts.add(normals);
                 indexParts.add(indices);
+                regionPerPart.add(meshRegion);
                 hasAnyNormals = hasAnyNormals || normals.length > 0;
                 totalVertexCount += vertexCount;
             }
@@ -82,13 +106,362 @@ public class SphereMeshService {
                 ? mergeNormalsAligned(normalParts, positionParts)
                 : new float[0];
         int[] mergedTriangleIndices = mergeIndicesWithVertexOffset(indexParts, positionParts);
-        int[] quads = trianglesToDegenerateQuads(mergedTriangleIndices);
+        MeshRegion[] triangleRegion = buildTriangleRegions(indexParts, regionPerPart);
+
+        TiledMesh tiled = buildQuadsAndAreaIds(mergedTriangleIndices, mergedPositions, triangleRegion);
 
         if (mergedPositions.length / 3 != totalVertexCount) {
             throw new IllegalStateException("Merged positions size mismatch");
         }
 
-        return new SphereMeshDto(mergedPositions, mergedNormals, quads);
+        return new SphereMeshDto(mergedPositions, mergedNormals, tiled.quads, tiled.areaIds);
+    }
+
+    private int countMeshesWithPrimitives(JsonNode meshes) {
+        int n = 0;
+        for (JsonNode mesh : meshes) {
+            JsonNode primitives = mesh.path("primitives");
+            if (primitives.isArray() && primitives.size() > 0) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * Сопоставляет индекс mesh из glTF с регионом по имени <strong>объекта</strong> (node.name),
+     * как в Outliner Blender.
+     */
+    private Map<Integer, MeshRegion> meshIndexToRegionFromObjectNodes(JsonNode root) {
+        Map<Integer, MeshRegion> map = new HashMap<>();
+        JsonNode nodes = root.path("nodes");
+        if (!nodes.isArray()) {
+            return map;
+        }
+        for (JsonNode node : nodes) {
+            if (!node.has("mesh")) {
+                continue;
+            }
+            int meshIdx = node.path("mesh").asInt(-1);
+            if (meshIdx < 0) {
+                continue;
+            }
+            String objectName = node.path("name").asText("");
+            MeshRegion r = classifyRegionFromBlenderObjectName(objectName);
+            if (r != null) {
+                map.putIfAbsent(meshIdx, r);
+            }
+        }
+        return map;
+    }
+
+    /** Имена объектов: North, South, Sphere (как в сцене Blender). */
+    private MeshRegion classifyRegionFromBlenderObjectName(String objectName) {
+        String n = objectName == null ? "" : objectName.toLowerCase(Locale.ROOT).trim();
+        if (n.equals("north") || n.contains("north")) {
+            return MeshRegion.NORTH;
+        }
+        if (n.equals("south") || n.contains("south")) {
+            return MeshRegion.SOUTH;
+        }
+        if (n.contains("sphere")) {
+            return MeshRegion.SPHERE;
+        }
+        return null;
+    }
+
+    /**
+     * Fallback: имена mesh data в GLB (часто не совпадают с объектами).
+     * Если ровно 3 mesh с примитивами и имя не распознано — порядок: Sphere, North, South.
+     */
+    private MeshRegion classifyMeshName(String name, int meshIndex, int meshesWithPrimitives) {
+        String n = name == null ? "" : name.toLowerCase(Locale.ROOT).trim();
+        if (n.contains("north")) {
+            return MeshRegion.NORTH;
+        }
+        if (n.contains("south")) {
+            return MeshRegion.SOUTH;
+        }
+        if (n.contains("sphere")) {
+            return MeshRegion.SPHERE;
+        }
+        if (meshesWithPrimitives == 3 && meshIndex < 3) {
+            return switch (meshIndex) {
+                case 0 -> MeshRegion.SPHERE;
+                case 1 -> MeshRegion.NORTH;
+                case 2 -> MeshRegion.SOUTH;
+                default -> MeshRegion.SPHERE;
+            };
+        }
+        return MeshRegion.SPHERE;
+    }
+
+    private MeshRegion[] buildTriangleRegions(List<int[]> indexParts, List<MeshRegion> regionPerPart) {
+        if (indexParts.size() != regionPerPart.size()) {
+            throw new IllegalStateException("indexParts and regionPerPart size mismatch");
+        }
+        int triangleCount = indexParts.stream().mapToInt(a -> a.length).sum() / 3;
+        MeshRegion[] out = new MeshRegion[triangleCount];
+        int triOffset = 0;
+        for (int p = 0; p < indexParts.size(); p++) {
+            int n = indexParts.get(p).length / 3;
+            MeshRegion r = regionPerPart.get(p);
+            for (int i = 0; i < n; i++) {
+                out[triOffset + i] = r;
+            }
+            triOffset += n;
+        }
+        return out;
+    }
+
+    /**
+     * North и South — по одному areaId на всю группу.
+     * Sphere — пары треугольников в квадраты, у каждого квадрата свой areaId; остаток — по одному id на треугольник.
+     */
+    private TiledMesh buildQuadsAndAreaIds(
+            int[] triangleIndices,
+            float[] positions,
+            MeshRegion[] triangleRegion
+    ) {
+        int triangleCount = triangleIndices.length / 3;
+        if (triangleRegion.length != triangleCount) {
+            throw new IllegalStateException("triangleRegion length mismatch");
+        }
+
+        int nextAreaId = 0;
+        int northAreaId = nextAreaId++;
+        int southAreaId = nextAreaId++;
+
+        List<Integer> northTris = new ArrayList<>();
+        List<Integer> southTris = new ArrayList<>();
+        boolean[] isSphere = new boolean[triangleCount];
+        for (int t = 0; t < triangleCount; t++) {
+            switch (triangleRegion[t]) {
+                case NORTH -> northTris.add(t);
+                case SOUTH -> southTris.add(t);
+                case SPHERE -> isSphere[t] = true;
+            }
+        }
+
+        List<int[]> quadsList = new ArrayList<>();
+        List<Integer> areaIdsList = new ArrayList<>();
+
+        for (int t : northTris) {
+            int a = triangleIndices[t * 3];
+            int b = triangleIndices[t * 3 + 1];
+            int c = triangleIndices[t * 3 + 2];
+            quadsList.add(new int[]{a, b, c, c});
+            areaIdsList.add(northAreaId);
+        }
+        for (int t : southTris) {
+            int a = triangleIndices[t * 3];
+            int b = triangleIndices[t * 3 + 1];
+            int c = triangleIndices[t * 3 + 2];
+            quadsList.add(new int[]{a, b, c, c});
+            areaIdsList.add(southAreaId);
+        }
+
+        appendSphereQuads(triangleIndices, positions, isSphere, nextAreaId, quadsList, areaIdsList);
+
+        int[] quads = new int[quadsList.size() * 4];
+        int[] areaIds = new int[areaIdsList.size()];
+        for (int i = 0; i < quadsList.size(); i++) {
+            int[] q = quadsList.get(i);
+            quads[i * 4] = q[0];
+            quads[i * 4 + 1] = q[1];
+            quads[i * 4 + 2] = q[2];
+            quads[i * 4 + 3] = q[3];
+            areaIds[i] = areaIdsList.get(i);
+        }
+        return new TiledMesh(quads, areaIds);
+    }
+
+    private void appendSphereQuads(
+            int[] triangleIndices,
+            float[] positions,
+            boolean[] isSphere,
+            int firstSphereAreaId,
+            List<int[]> quadsList,
+            List<Integer> areaIdsList
+    ) {
+        int triangleCount = triangleIndices.length / 3;
+        int[][] triangles = new int[triangleCount][3];
+        for (int t = 0; t < triangleCount; t++) {
+            triangles[t][0] = triangleIndices[t * 3];
+            triangles[t][1] = triangleIndices[t * 3 + 1];
+            triangles[t][2] = triangleIndices[t * 3 + 2];
+        }
+
+        Map<Long, List<Integer>> edgeToTriangles = new HashMap<>();
+        for (int t = 0; t < triangleCount; t++) {
+            if (!isSphere[t]) {
+                continue;
+            }
+            int a = triangles[t][0];
+            int b = triangles[t][1];
+            int c = triangles[t][2];
+            addEdgeOwner(edgeToTriangles, edgeKey(a, b), t);
+            addEdgeOwner(edgeToTriangles, edgeKey(b, c), t);
+            addEdgeOwner(edgeToTriangles, edgeKey(c, a), t);
+        }
+
+        float[][] triangleNormals = buildTriangleNormals(triangles, positions);
+        int[] bestNeighbor = new int[triangleCount];
+        Arrays.fill(bestNeighbor, -1);
+        long[] bestNeighborEdge = new long[triangleCount];
+        Arrays.fill(bestNeighborEdge, Long.MIN_VALUE);
+        double[] bestScore = new double[triangleCount];
+        Arrays.fill(bestScore, Double.NEGATIVE_INFINITY);
+
+        for (Map.Entry<Long, List<Integer>> entry : edgeToTriangles.entrySet()) {
+            List<Integer> owners = entry.getValue();
+            if (owners.size() != 2) {
+                continue;
+            }
+            int t1 = owners.get(0);
+            int t2 = owners.get(1);
+            if (!isSphere[t1] || !isSphere[t2]) {
+                continue;
+            }
+            int u = edgeHi(entry.getKey());
+            int v = edgeLo(entry.getKey());
+            int x = oppositeVertex(triangles[t1], u, v);
+            int y = oppositeVertex(triangles[t2], u, v);
+            if (x < 0 || y < 0 || x == y) {
+                continue;
+            }
+            double score = scorePair(triangleNormals[t1], triangleNormals[t2], positions, u, v);
+            if (score > bestScore[t1]) {
+                bestScore[t1] = score;
+                bestNeighbor[t1] = t2;
+                bestNeighborEdge[t1] = entry.getKey();
+            }
+            if (score > bestScore[t2]) {
+                bestScore[t2] = score;
+                bestNeighbor[t2] = t1;
+                bestNeighborEdge[t2] = entry.getKey();
+            }
+        }
+
+        boolean[] consumed = new boolean[triangleCount];
+        int areaId = firstSphereAreaId;
+
+        for (int t = 0; t < triangleCount; t++) {
+            if (!isSphere[t] || consumed[t]) {
+                continue;
+            }
+            int neighbor = bestNeighbor[t];
+            if (neighbor < 0 || consumed[neighbor]) {
+                continue;
+            }
+            if (bestNeighbor[neighbor] != t) {
+                continue;
+            }
+            long sharedEdge = bestNeighborEdge[t];
+            if (sharedEdge == Long.MIN_VALUE || bestNeighborEdge[neighbor] != sharedEdge) {
+                continue;
+            }
+            int[] tri1 = triangles[t];
+            int[] tri2 = triangles[neighbor];
+            int u = edgeHi(sharedEdge);
+            int v = edgeLo(sharedEdge);
+            int x = oppositeVertex(tri1, u, v);
+            int y = oppositeVertex(tri2, u, v);
+            if (x == -1 || y == -1 || x == y) {
+                continue;
+            }
+            quadsList.add(new int[]{u, x, v, y});
+            areaIdsList.add(areaId++);
+            consumed[t] = true;
+            consumed[neighbor] = true;
+        }
+
+        for (int t = 0; t < triangleCount; t++) {
+            if (!isSphere[t] || consumed[t]) {
+                continue;
+            }
+            int a = triangles[t][0];
+            int b = triangles[t][1];
+            int c = triangles[t][2];
+            quadsList.add(new int[]{a, b, c, c});
+            areaIdsList.add(areaId++);
+        }
+    }
+
+    private float[][] buildTriangleNormals(int[][] triangles, float[] positions) {
+        float[][] normals = new float[triangles.length][3];
+        for (int t = 0; t < triangles.length; t++) {
+            int a = triangles[t][0];
+            int b = triangles[t][1];
+            int c = triangles[t][2];
+            float ax = positions[a * 3];
+            float ay = positions[a * 3 + 1];
+            float az = positions[a * 3 + 2];
+            float bx = positions[b * 3];
+            float by = positions[b * 3 + 1];
+            float bz = positions[b * 3 + 2];
+            float cx = positions[c * 3];
+            float cy = positions[c * 3 + 1];
+            float cz = positions[c * 3 + 2];
+            float abx = bx - ax;
+            float aby = by - ay;
+            float abz = bz - az;
+            float acx = cx - ax;
+            float acy = cy - ay;
+            float acz = cz - az;
+            float nx = aby * acz - abz * acy;
+            float ny = abz * acx - abx * acz;
+            float nz = abx * acy - aby * acx;
+            float len = (float) Math.sqrt(nx * nx + ny * ny + nz * nz);
+            if (len > 1e-12f) {
+                normals[t][0] = nx / len;
+                normals[t][1] = ny / len;
+                normals[t][2] = nz / len;
+            }
+        }
+        return normals;
+    }
+
+    private double scorePair(float[] n1, float[] n2, float[] positions, int u, int v) {
+        double dot = n1[0] * n2[0] + n1[1] * n2[1] + n1[2] * n2[2];
+        float ux = positions[u * 3];
+        float uy = positions[u * 3 + 1];
+        float uz = positions[u * 3 + 2];
+        float vx = positions[v * 3];
+        float vy = positions[v * 3 + 1];
+        float vz = positions[v * 3 + 2];
+        double dx = ux - vx;
+        double dy = uy - vy;
+        double dz = uz - vz;
+        double edgeLengthSq = dx * dx + dy * dy + dz * dz;
+        return dot * 1000.0 + edgeLengthSq;
+    }
+
+    private void addEdgeOwner(Map<Long, List<Integer>> edgeToTriangles, long edgeKey, int triangleIndex) {
+        edgeToTriangles.computeIfAbsent(edgeKey, ignored -> new ArrayList<>(2)).add(triangleIndex);
+    }
+
+    private long edgeKey(int a, int b) {
+        int hi = Math.max(a, b);
+        int lo = Math.min(a, b);
+        return (((long) hi) << 32) | (lo & 0xffffffffL);
+    }
+
+    private int edgeHi(long key) {
+        return (int) (key >>> 32);
+    }
+
+    private int edgeLo(long key) {
+        return (int) key;
+    }
+
+    private int oppositeVertex(int[] triangle, int u, int v) {
+        for (int vertex : triangle) {
+            if (vertex != u && vertex != v) {
+                return vertex;
+            }
+        }
+        return -1;
     }
 
     private byte[] readGlbBytes() {
@@ -204,9 +577,9 @@ public class SphereMeshService {
         ByteBuffer bb = ByteBuffer.wrap(binChunk).order(ByteOrder.LITTLE_ENDIAN);
         int[] indices = new int[count];
         int elementSize = switch (componentType) {
-            case 5121 -> 1; // UNSIGNED_BYTE
-            case 5123 -> 2; // UNSIGNED_SHORT
-            case 5125 -> 4; // UNSIGNED_INT
+            case 5121 -> 1;
+            case 5123 -> 2;
+            case 5125 -> 4;
             default -> throw new IllegalStateException("Unsupported index componentType: " + componentType);
         };
 
@@ -263,22 +636,15 @@ public class SphereMeshService {
         return out;
     }
 
-    private int[] trianglesToDegenerateQuads(int[] triangleIndices) {
-        int triangleCount = triangleIndices.length / 3;
-        int[] quads = new int[triangleCount * 4];
-        int q = 0;
-        for (int t = 0; t < triangleCount; t++) {
-            int a = triangleIndices[t * 3];
-            int b = triangleIndices[t * 3 + 1];
-            int c = triangleIndices[t * 3 + 2];
-            quads[q++] = a;
-            quads[q++] = b;
-            quads[q++] = c;
-            quads[q++] = c;
-        }
-        return quads;
+    private enum MeshRegion {
+        SPHERE,
+        NORTH,
+        SOUTH
     }
 
     private record ParsedGlb(JsonNode root, byte[] binChunk) {
+    }
+
+    private record TiledMesh(int[] quads, int[] areaIds) {
     }
 }
