@@ -40,6 +40,7 @@ public class SphereMeshService {
 
         List<float[]> positionParts = new ArrayList<>();
         List<float[]> normalParts = new ArrayList<>();
+        List<float[]> uvParts = new ArrayList<>();
         List<int[]> indexParts = new ArrayList<>();
         List<MeshRegion> regionPerPart = new ArrayList<>();
         boolean hasAnyNormals = false;
@@ -88,8 +89,17 @@ public class SphereMeshService {
                     throw new IllegalStateException("Indices are not triangles");
                 }
 
+                int texCoordAccessor = primitive.path("attributes").path("TEXCOORD_0").asInt(-1);
+                float[] uvs = texCoordAccessor >= 0
+                        ? readFloatVec2Accessor(parsedGlb.root, parsedGlb.binChunk, texCoordAccessor)
+                        : new float[vertexCount * 2];
+                if (uvs.length != vertexCount * 2) {
+                    throw new IllegalStateException("UV length must match vertex count");
+                }
+
                 positionParts.add(positions);
                 normalParts.add(normals);
+                uvParts.add(uvs);
                 indexParts.add(indices);
                 regionPerPart.add(meshRegion);
                 hasAnyNormals = hasAnyNormals || normals.length > 0;
@@ -105,6 +115,7 @@ public class SphereMeshService {
         float[] mergedNormals = hasAnyNormals
                 ? mergeNormalsAligned(normalParts, positionParts)
                 : new float[0];
+        float[] mergedUvs = mergeNormalsAligned(uvParts, positionParts);
         int[] mergedTriangleIndices = mergeIndicesWithVertexOffset(indexParts, positionParts);
         MeshRegion[] triangleRegion = buildTriangleRegions(indexParts, regionPerPart);
 
@@ -114,7 +125,7 @@ public class SphereMeshService {
             throw new IllegalStateException("Merged positions size mismatch");
         }
 
-        return new SphereMeshDto(mergedPositions, mergedNormals, tiled.quads, tiled.areaIds);
+        return new SphereMeshDto(mergedPositions, mergedNormals, mergedUvs, tiled.quads, tiled.areaIds);
     }
 
     private int countMeshesWithPrimitives(JsonNode meshes) {
@@ -557,6 +568,37 @@ public class SphereMeshService {
             out[i * 3] = bb.getFloat(base);
             out[i * 3 + 1] = bb.getFloat(base + 4);
             out[i * 3 + 2] = bb.getFloat(base + 8);
+        }
+        return out;
+    }
+
+    private float[] readFloatVec2Accessor(JsonNode root, byte[] binChunk, int accessorIndex) {
+        JsonNode accessors = root.path("accessors");
+        JsonNode accessor = accessors.path(accessorIndex);
+        if (accessor.isMissingNode()) {
+            throw new IllegalStateException("Accessor not found: " + accessorIndex);
+        }
+
+        int componentType = accessor.path("componentType").asInt();
+        String type = accessor.path("type").asText();
+        int count = accessor.path("count").asInt();
+        if (componentType != 5126 || !"VEC2".equals(type)) {
+            throw new IllegalStateException("Expected FLOAT VEC2 accessor for TEXCOORD");
+        }
+
+        int byteOffset = accessor.path("byteOffset").asInt(0);
+        int bufferViewIndex = accessor.path("bufferView").asInt(-1);
+        JsonNode bufferView = root.path("bufferViews").path(bufferViewIndex);
+        int viewOffset = bufferView.path("byteOffset").asInt(0);
+        int stride = bufferView.path("byteStride").asInt(8);
+
+        float[] out = new float[count * 2];
+        ByteBuffer bb = ByteBuffer.wrap(binChunk).order(ByteOrder.LITTLE_ENDIAN);
+
+        for (int i = 0; i < count; i++) {
+            int base = viewOffset + byteOffset + (i * stride);
+            out[i * 2] = bb.getFloat(base);
+            out[i * 2 + 1] = bb.getFloat(base + 4);
         }
         return out;
     }

@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ru">
 <head>
     <meta charset="UTF-8" />
-    <title>Sphere Tiles</title>
+    <title>Sphere UV Atlas</title>
     <style>
         html, body {
             margin: 0;
@@ -35,56 +35,8 @@
     import * as THREE from 'https://esm.sh/three@0.160.0';
     import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
 
-    const API_URL = 'http://localhost:8080/sphere';
+    const BASE = 'http://localhost:8080';
 
-    // -----------------------------
-    // scene
-    // -----------------------------
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111);
-
-    const camera = new THREE.PerspectiveCamera(
-        75,
-        window.innerWidth / window.innerHeight,
-        0.1,
-        1000
-    );
-
-    camera.position.set(0, 0, 3);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
-
-    // -----------------------------
-    // controls
-    // -----------------------------
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.enablePan = false;
-
-    // -----------------------------
-    // lights
-    // -----------------------------
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-    dirLight.position.set(5, 5, 5);
-    scene.add(dirLight);
-
-    // -----------------------------
-    // fetch geometry
-    // -----------------------------
-    const response = await fetch(API_URL);
-    if (!response.ok) {
-        throw new Error(`Sphere API failed: ${response.status}`);
-    }
-    const data = await response.json();
-
-    // -----------------------------
-    // validation + normalization
-    // -----------------------------
     const toJsArray = (value) => {
         if (Array.isArray(value)) return value;
         if (ArrayBuffer.isView(value)) return Array.from(value);
@@ -95,6 +47,7 @@
         const positions = toJsArray(payload?.positions ?? payload?.vertices);
         const quads = toJsArray(payload?.quads ?? payload?.faces);
         const normals = toJsArray(payload?.normals ?? []);
+        const uvs = toJsArray(payload?.uvs ?? []);
         const areaIds = toJsArray(payload?.areaIds ?? payload?.tileIds ?? []);
 
         if (!positions || !quads) {
@@ -109,6 +62,10 @@
         if (quads.length % 4 !== 0) {
             throw new Error(`Invalid quads length: ${quads.length}`);
         }
+        const vCount = positions.length / 3;
+        // if (uvs.length > 0 && uvs.length !== vCount * 2) {
+        //     throw new Error(`Invalid uvs length: expected ${vCount * 2}, got ${uvs.length}`);
+        // }
         if (normals.length > 0 && normals.length !== positions.length) {
             throw new Error(
                 `Invalid normals length: positions=${positions.length}, normals=${normals.length}`
@@ -120,96 +77,161 @@
             );
         }
 
-        return { positions, quads, normals, areaIds };
+        return { positions, quads, normals, uvs, areaIds };
     }
 
-    const meshData = normalizeMeshData(data);
+    /** mesh UV → UV в атласе (поля из JSON как у Jackson для record) */
+    function meshUvToAtlas(u, v, region) {
+        const meshUmin = region.meshUmin ?? region.meshUMin;
+        const meshVmin = region.meshVmin ?? region.meshVMin;
+        const meshUmax = region.meshUmax ?? region.meshUMax;
+        const meshVmax = region.meshVmax ?? region.meshVMax;
+        const atlasUmin = region.atlasUmin ?? region.atlasUMin;
+        const atlasVmin = region.atlasVmin ?? region.atlasVMin;
+        const atlasUmax = region.atlasUmax ?? region.atlasUMax;
+        const atlasVmax = region.atlasVmax ?? region.atlasVMax;
 
-    function buildTrianglesFromQuads(quads, areaIds) {
-        if (quads.length % 4 !== 0) {
-            throw new Error('Invalid quads array');
-        }
-        const indices = [];
+        const du = meshUmax - meshUmin;
+        const dv = meshVmax - meshVmin;
+        const nu = du > 1e-10 ? (u - meshUmin) / du : 0.5;
+        const nv = dv > 1e-10 ? (v - meshVmin) / dv : 0.5;
+        const uu = atlasUmin + nu * (atlasUmax - atlasUmin);
+        const vv = atlasVmin + nv * (atlasVmax - atlasVmin);
+        return [uu, vv];
+    }
+
+    function buildExpandedMeshWithAtlasUv(meshData, areaMap) {
+        const positions = meshData.positions;
+        const uvs = meshData.uvs;
+        const quads = meshData.quads;
+        const areaIds = meshData.areaIds;
+
+        const pos = [];
+        const uvOut = [];
         const triangleAreaIds = [];
 
         for (let i = 0; i < quads.length; i += 4) {
             const q = i / 4;
             const areaId = areaIds.length > 0 ? areaIds[q] : q;
+            const region = areaMap.get(areaId);
             const a = quads[i];
             const b = quads[i + 1];
             const c = quads[i + 2];
             const d = quads[i + 3];
 
-            indices.push(a, b, c);
-            triangleAreaIds.push(areaId);
-
-            if (c !== d) {
-                indices.push(a, c, d);
+            function pushTri(i0, i1, i2) {
+                for (const vidx of [i0, i1, i2]) {
+                    pos.push(
+                        positions[vidx * 3],
+                        positions[vidx * 3 + 1],
+                        positions[vidx * 3 + 2]
+                    );
+                    if (uvs.length === 0) {
+                        uvOut.push(0, 0);
+                    } else if (region) {
+                        const u = uvs[vidx * 2];
+                        const v = uvs[vidx * 2 + 1];
+                        const [au, av] = meshUvToAtlas(u, v, region);
+                        uvOut.push(au, av);
+                    } else {
+                        const u = uvs[vidx * 2];
+                        const v = uvs[vidx * 2 + 1];
+                        uvOut.push(u, v);
+                    }
+                }
                 triangleAreaIds.push(areaId);
             }
+
+            pushTri(a, b, c);
+            if (c !== d) {
+                pushTri(a, c, d);
+            }
         }
-        return { indices, triangleAreaIds };
+
+        return {
+            position: new Float32Array(pos),
+            uv: new Float32Array(uvOut),
+            triangleAreaIds
+        };
     }
 
-    const { indices, triangleAreaIds } = buildTrianglesFromQuads(meshData.quads, meshData.areaIds);
+    const [meshRes, layoutRes] = await Promise.all([
+        fetch(`${BASE}/sphere`),
+        fetch(`${BASE}/api/uv-atlas/layout`)
+    ]);
 
-    let geometry = new THREE.BufferGeometry();
+    if (!meshRes.ok) {
+        throw new Error(`Sphere API failed: ${meshRes.status}`);
+    }
+    if (!layoutRes.ok) {
+        throw new Error(`UV layout API failed: ${layoutRes.status}`);
+    }
 
-    geometry.setAttribute(
-        'position',
-        new THREE.BufferAttribute(new Float32Array(meshData.positions), 3)
+    const data = await meshRes.json();
+    const layout = await layoutRes.json();
+
+    const meshData = normalizeMeshData(data);
+    const areaMap = new Map();
+    for (const a of layout.areas ?? []) {
+        areaMap.set(a.areaId, a);
+    }
+
+    const { position, uv, triangleAreaIds } = buildExpandedMeshWithAtlasUv(meshData, areaMap);
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(
+        75,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        1000
     );
+    camera.position.set(0, 0, 3);
 
-    if (meshData.normals.length > 0) {
-        geometry.setAttribute(
-            'normal',
-            new THREE.BufferAttribute(new Float32Array(meshData.normals), 3)
-        );
-    } else {
-        geometry.computeVertexNormals();
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.enablePan = false;
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(5, 5, 5);
+    scene.add(dirLight);
+
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
+    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geometry.computeVertexNormals();
+
+    const textureLoader = new THREE.TextureLoader();
+    const atlasUrl = layout.atlasUrl?.startsWith('http')
+        ? layout.atlasUrl
+        : `${BASE}${layout.atlasUrl ?? '/api/uv-atlas/atlas.png'}`;
+    const texture = await (typeof textureLoader.loadAsync === 'function'
+        ? textureLoader.loadAsync(atlasUrl)
+        : new Promise((resolve, reject) => {
+            textureLoader.load(atlasUrl, resolve, undefined, reject);
+        }));
+    texture.colorSpace = THREE.SRGBColorSpace;
+    texture.flipY = false;
+
+    const triangleCount = triangleAreaIds.length;
+    const vertexCount = position.length / 3;
+    if (vertexCount !== triangleCount * 3) {
+        throw new Error('vertex / triangle mismatch');
     }
-
-    geometry.setIndex(indices);
-    geometry = geometry.toNonIndexed();
-    const vertexCount = geometry.attributes.position.count;
-    const triangleCount = vertexCount / 3;
-    if (triangleCount !== triangleAreaIds.length) {
-        throw new Error(
-            `triangleAreaIds length mismatch: triangles=${triangleCount}, areaIds=${triangleAreaIds.length}`
-        );
-    }
-
-    const colorArray = new Float32Array(vertexCount * 3);
-    const areaColorMap = new Map();
-    const randomColorForArea = (areaId) => {
-        let color = areaColorMap.get(areaId);
-        if (!color) {
-            color = new THREE.Color(Math.random(), Math.random(), Math.random());
-            areaColorMap.set(areaId, color);
-        }
-        return color;
-    };
-
-    for (let t = 0; t < triangleCount; t++) {
-        const areaId = triangleAreaIds[t];
-        const color = randomColorForArea(areaId);
-        for (let local = 0; local < 3; local++) {
-            const v = t * 3 + local;
-            colorArray[v * 3] = color.r;
-            colorArray[v * 3 + 1] = color.g;
-            colorArray[v * 3 + 2] = color.b;
-        }
-    }
-    geometry.setAttribute('color', new THREE.BufferAttribute(colorArray, 3));
 
     const material = new THREE.MeshBasicMaterial({
-        vertexColors: true,
+        map: texture,
         side: THREE.DoubleSide
     });
 
-    // -----------------------------
-    // mesh
-    // -----------------------------
     const mesh = new THREE.Mesh(geometry, material);
     scene.add(mesh);
 
@@ -235,33 +257,20 @@
         tooltip.style.display = 'block';
     });
 
-    // -----------------------------
-    // camera auto distance
-    // -----------------------------
     geometry.computeBoundingSphere();
-
     if (geometry.boundingSphere) {
         const r = geometry.boundingSphere.radius;
         camera.position.set(0, 0, r * 2.5);
         controls.update();
     }
 
-    // -----------------------------
-    // render
-    // -----------------------------
     function animate() {
         requestAnimationFrame(animate);
-
         controls.update();
-
         renderer.render(scene, camera);
     }
-
     animate();
 
-    // -----------------------------
-    // resize
-    // -----------------------------
     window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
