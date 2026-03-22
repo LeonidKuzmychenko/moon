@@ -1,6 +1,8 @@
 spring:
   application:
     name: test-moon
+server:
+  port: 8080
   servlet:
     multipart:
       max-file-size: 5MB

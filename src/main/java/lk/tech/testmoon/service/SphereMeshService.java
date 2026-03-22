@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.List;
 
 @Service
 public class SphereMeshService {
@@ -125,7 +126,7 @@ public class SphereMeshService {
             throw new IllegalStateException("Merged positions size mismatch");
         }
 
-        return new SphereMeshDto(mergedPositions, mergedNormals, mergedUvs, tiled.quads, tiled.areaIds);
+        return new SphereMeshDto(mergedPositions, mergedNormals, mergedUvs, tiled.quads, tiled.areaIds, tiled.areaRegions);
     }
 
     private int countMeshesWithPrimitives(JsonNode meshes) {
@@ -256,6 +257,10 @@ public class SphereMeshService {
 
         List<int[]> quadsList = new ArrayList<>();
         List<Integer> areaIdsList = new ArrayList<>();
+        Map<Integer, String> areaIdToRegion = new HashMap<>();
+
+        areaIdToRegion.put(northAreaId, "NORTH");
+        areaIdToRegion.put(southAreaId, "SOUTH");
 
         for (int t : northTris) {
             int a = triangleIndices[t * 3];
@@ -272,7 +277,7 @@ public class SphereMeshService {
             areaIdsList.add(southAreaId);
         }
 
-        appendSphereQuads(triangleIndices, positions, isSphere, nextAreaId, quadsList, areaIdsList);
+        appendSphereGroups(triangleIndices, positions, isSphere, nextAreaId, quadsList, areaIdsList, areaIdToRegion);
 
         int[] quads = new int[quadsList.size() * 4];
         int[] areaIds = new int[areaIdsList.size()];
@@ -284,16 +289,27 @@ public class SphereMeshService {
             quads[i * 4 + 3] = q[3];
             areaIds[i] = areaIdsList.get(i);
         }
-        return new TiledMesh(quads, areaIds);
+
+        int maxId = -1;
+        for (int aid : areaIds) if (aid > maxId) maxId = aid;
+        String[] areaRegions = new String[maxId + 1];
+        for (Map.Entry<Integer, String> entry : areaIdToRegion.entrySet()) {
+            areaRegions[entry.getKey()] = entry.getValue();
+        }
+
+        return new TiledMesh(quads, areaIds, areaRegions);
     }
 
-    private void appendSphereQuads(
+    private static final int TARGET_GROUP_SIZE = 12; // Примерно 12 треугольников в одной области
+
+    private void appendSphereGroups(
             int[] triangleIndices,
             float[] positions,
             boolean[] isSphere,
             int firstSphereAreaId,
             List<int[]> quadsList,
-            List<Integer> areaIdsList
+            List<Integer> areaIdsList,
+            Map<Integer, String> areaIdToRegion
     ) {
         int triangleCount = triangleIndices.length / 3;
         int[][] triangles = new int[triangleCount][3];
@@ -305,97 +321,61 @@ public class SphereMeshService {
 
         Map<Long, List<Integer>> edgeToTriangles = new HashMap<>();
         for (int t = 0; t < triangleCount; t++) {
-            if (!isSphere[t]) {
-                continue;
-            }
-            int a = triangles[t][0];
-            int b = triangles[t][1];
-            int c = triangles[t][2];
-            addEdgeOwner(edgeToTriangles, edgeKey(a, b), t);
-            addEdgeOwner(edgeToTriangles, edgeKey(b, c), t);
-            addEdgeOwner(edgeToTriangles, edgeKey(c, a), t);
-        }
-
-        float[][] triangleNormals = buildTriangleNormals(triangles, positions);
-        int[] bestNeighbor = new int[triangleCount];
-        Arrays.fill(bestNeighbor, -1);
-        long[] bestNeighborEdge = new long[triangleCount];
-        Arrays.fill(bestNeighborEdge, Long.MIN_VALUE);
-        double[] bestScore = new double[triangleCount];
-        Arrays.fill(bestScore, Double.NEGATIVE_INFINITY);
-
-        for (Map.Entry<Long, List<Integer>> entry : edgeToTriangles.entrySet()) {
-            List<Integer> owners = entry.getValue();
-            if (owners.size() != 2) {
-                continue;
-            }
-            int t1 = owners.get(0);
-            int t2 = owners.get(1);
-            if (!isSphere[t1] || !isSphere[t2]) {
-                continue;
-            }
-            int u = edgeHi(entry.getKey());
-            int v = edgeLo(entry.getKey());
-            int x = oppositeVertex(triangles[t1], u, v);
-            int y = oppositeVertex(triangles[t2], u, v);
-            if (x < 0 || y < 0 || x == y) {
-                continue;
-            }
-            double score = scorePair(triangleNormals[t1], triangleNormals[t2], positions, u, v);
-            if (score > bestScore[t1]) {
-                bestScore[t1] = score;
-                bestNeighbor[t1] = t2;
-                bestNeighborEdge[t1] = entry.getKey();
-            }
-            if (score > bestScore[t2]) {
-                bestScore[t2] = score;
-                bestNeighbor[t2] = t1;
-                bestNeighborEdge[t2] = entry.getKey();
-            }
+            if (!isSphere[t]) continue;
+            addEdgeOwner(edgeToTriangles, edgeKey(triangles[t][0], triangles[t][1]), t);
+            addEdgeOwner(edgeToTriangles, edgeKey(triangles[t][1], triangles[t][2]), t);
+            addEdgeOwner(edgeToTriangles, edgeKey(triangles[t][2], triangles[t][0]), t);
         }
 
         boolean[] consumed = new boolean[triangleCount];
         int areaId = firstSphereAreaId;
 
         for (int t = 0; t < triangleCount; t++) {
-            if (!isSphere[t] || consumed[t]) {
-                continue;
-            }
-            int neighbor = bestNeighbor[t];
-            if (neighbor < 0 || consumed[neighbor]) {
-                continue;
-            }
-            if (bestNeighbor[neighbor] != t) {
-                continue;
-            }
-            long sharedEdge = bestNeighborEdge[t];
-            if (sharedEdge == Long.MIN_VALUE || bestNeighborEdge[neighbor] != sharedEdge) {
-                continue;
-            }
-            int[] tri1 = triangles[t];
-            int[] tri2 = triangles[neighbor];
-            int u = edgeHi(sharedEdge);
-            int v = edgeLo(sharedEdge);
-            int x = oppositeVertex(tri1, u, v);
-            int y = oppositeVertex(tri2, u, v);
-            if (x == -1 || y == -1 || x == y) {
-                continue;
-            }
-            quadsList.add(new int[]{u, x, v, y});
-            areaIdsList.add(areaId++);
-            consumed[t] = true;
-            consumed[neighbor] = true;
-        }
+            if (!isSphere[t] || consumed[t]) continue;
 
-        for (int t = 0; t < triangleCount; t++) {
-            if (!isSphere[t] || consumed[t]) {
-                continue;
+            // Region Growing (BFS)
+            List<Integer> group = new ArrayList<>();
+            Queue<Integer> queue = new LinkedList<>();
+            queue.add(t);
+            consumed[t] = true;
+
+            while (!queue.isEmpty() && group.size() < TARGET_GROUP_SIZE) {
+                int current = queue.poll();
+                group.add(current);
+
+                // Find neighbors
+                for (int i = 0; i < 3; i++) {
+                    int v1 = triangles[current][i];
+                    int v2 = triangles[current][(i + 1) % 3];
+                    long edge = edgeKey(v1, v2);
+                    List<Integer> neighbors = edgeToTriangles.get(edge);
+                    if (neighbors != null) {
+                        for (int neighbor : neighbors) {
+                            if (isSphere[neighbor] && !consumed[neighbor]) {
+                                consumed[neighbor] = true;
+                                queue.add(neighbor);
+                                if (group.size() + queue.size() >= TARGET_GROUP_SIZE) break;
+                            }
+                        }
+                    }
+                    if (group.size() + queue.size() >= TARGET_GROUP_SIZE) break;
+                }
             }
-            int a = triangles[t][0];
-            int b = triangles[t][1];
-            int c = triangles[t][2];
-            quadsList.add(new int[]{a, b, c, c});
-            areaIdsList.add(areaId++);
+            
+            // Add remaining items in queue to group
+            while(!queue.isEmpty()) {
+                group.add(queue.poll());
+            }
+
+            for (int triIdx : group) {
+                int a = triangles[triIdx][0];
+                int b = triangles[triIdx][1];
+                int c = triangles[triIdx][2];
+                quadsList.add(new int[]{a, b, c, c});
+                areaIdsList.add(areaId);
+            }
+            areaIdToRegion.put(areaId, "SPHERE");
+            areaId++;
         }
     }
 
@@ -702,6 +682,6 @@ public class SphereMeshService {
     private record ParsedGlb(JsonNode root, byte[] binChunk) {
     }
 
-    private record TiledMesh(int[] quads, int[] areaIds) {
+    private record TiledMesh(int[] quads, int[] areaIds, String[] areaRegions) {
     }
 }

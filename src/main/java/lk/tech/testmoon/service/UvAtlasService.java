@@ -24,8 +24,10 @@ import java.util.List;
 public class UvAtlasService {
 
     private static final String TILE_NAME = "tile.jpg";
-    private static final int MAX_ATLAS_WIDTH = 2048;
+    private static final int DEFAULT_ATLAS_WIDTH = 2048;
     private static final double MIN_UV_RANGE = 1e-5;
+
+    private int atlasWidth = DEFAULT_ATLAS_WIDTH;
 
     private final SphereMeshService sphereMeshService;
 
@@ -34,6 +36,16 @@ public class UvAtlasService {
 
     public UvAtlasService(SphereMeshService sphereMeshService) {
         this.sphereMeshService = sphereMeshService;
+    }
+
+    public void setAtlasWidth(int width) {
+        if (width >= 64 && width <= 8192) {
+            this.atlasWidth = width;
+            synchronized (this) {
+                cachedAtlasPng = null;
+                cachedLayout = null;
+            }
+        }
     }
 
     public UvAtlasLayoutDto getOrBuildLayout() {
@@ -62,13 +74,16 @@ public class UvAtlasService {
         float[] uvs = mesh.uvs();
         int[] quads = mesh.quads();
         int[] areaIds = mesh.areaIds();
+        String[] areaRegions = mesh.areaRegions();
+        float[] positions = mesh.positions();
 
-        int vertexCount = mesh.positions().length / 3;
+        int vertexCount = positions.length / 3;
         if (uvs.length != vertexCount * 2) {
             throw new IllegalStateException("uvs length must match positions (2 floats per vertex)");
         }
 
         Map<Integer, float[]> bounds = new HashMap<>();
+        Map<Integer, Double> area3D = new HashMap<>();
         int quadCount = quads.length / 4;
         for (int qi = 0; qi < quadCount; qi++) {
             int aid = areaIds[qi];
@@ -76,6 +91,8 @@ public class UvAtlasService {
             int v1 = quads[qi * 4 + 1];
             int v2 = quads[qi * 4 + 2];
             int v3 = quads[qi * 4 + 3];
+
+            // UV bounds
             int[] verts = (v2 == v3) ? new int[]{v0, v1, v2} : new int[]{v0, v1, v2, v3};
             for (int vi : verts) {
                 float u = uvs[vi * 2];
@@ -86,6 +103,11 @@ public class UvAtlasService {
                 b[2] = Math.max(b[2], u);
                 b[3] = Math.max(b[3], v);
             }
+
+            // 3D Surface Area
+            double triArea1 = calculateTriangleArea(positions, v0, v1, v2);
+            double triArea2 = (v2 == v3) ? 0 : calculateTriangleArea(positions, v0, v2, v3);
+            area3D.put(aid, area3D.getOrDefault(aid, 0.0) + triArea1 + triArea2);
         }
 
         List<Integer> sortedIds = new ArrayList<>(bounds.keySet());
@@ -96,26 +118,47 @@ public class UvAtlasService {
             float[] b = bounds.get(aid);
             double uw = b[2] - b[0];
             double uh = b[3] - b[1];
-            if (uw < MIN_UV_RANGE) {
-                uw = MIN_UV_RANGE;
-            }
-            if (uh < MIN_UV_RANGE) {
-                uh = MIN_UV_RANGE;
-            }
-            packRects.add(new PackRect(aid, b[0], b[1], b[2], b[3], uw, uh));
+            if (uw < MIN_UV_RANGE) uw = MIN_UV_RANGE;
+            if (uh < MIN_UV_RANGE) uh = MIN_UV_RANGE;
+
+            String region = (aid < areaRegions.length) ? areaRegions[aid] : "SPHERE";
+            double a3d = area3D.getOrDefault(aid, 1.0);
+            packRects.add(new PackRect(aid, b[0], b[1], b[2], b[3], uw, uh, a3d, region));
         }
 
-        double sumArea = packRects.stream().mapToDouble(r -> r.uw * r.uh).sum();
-        if (sumArea <= 0) {
-            sumArea = 1;
-        }
-        double targetPixels = (double) MAX_ATLAS_WIDTH * MAX_ATLAS_WIDTH * 0.75;
-        double scale = Math.sqrt(targetPixels / sumArea);
-        scale = Math.min(scale, 512);
+        double totalArea3D = packRects.stream().mapToDouble(r -> r.area3D).sum();
+        if (totalArea3D <= 0) totalArea3D = 1;
+
+        // Расчет размера атласа и плотности пикселей
+        // Мы хотим, чтобы плотность пикселей была примерно одинаковой для всех областей.
+        // targetPixels — это желаемое количество пикселей в атласе.
+        int atlasW = this.atlasWidth;
+        double targetPixels = (double) atlasW * atlasW * 0.8;
+        double pixelPerArea3D = targetPixels / totalArea3D;
 
         for (PackRect r : packRects) {
-            r.pxW = Math.max(8, (int) Math.ceil(r.uw * scale));
-            r.pxH = Math.max(8, (int) Math.ceil(r.uh * scale));
+            double aspect;
+            if ("NORTH".equals(r.region) || "SOUTH".equals(r.region)) {
+                // Полюса — делаем квадратными в атласе для красоты
+                aspect = 1.0;
+            } else {
+                aspect = r.uw / r.uh;
+            }
+
+            // pxW * pxH = r.area3D * pixelPerArea3D
+            // pxW / pxH = aspect
+            // pxW = pxH * aspect -> pxH * pxH * aspect = r.area3D * pixelPerArea3D
+            r.pxH = (int) Math.round(Math.sqrt((r.area3D * pixelPerArea3D) / aspect));
+            r.pxW = (int) Math.round(r.pxH * aspect);
+
+            if (r.pxW < 8) r.pxW = 8;
+            if (r.pxH < 8) r.pxH = 8;
+            // Ограничение ширины: не больше ширины атласа за вычетом отступов
+            if (r.pxW > atlasW - 4) {
+                r.pxW = atlasW - 4;
+                r.pxH = (int) Math.round(r.pxW / aspect);
+                if (r.pxH < 8) r.pxH = 8;
+            }
         }
 
         packRects.sort((a, b) -> Integer.compare(b.pxH, a.pxH));
@@ -124,7 +167,6 @@ public class UvAtlasService {
         int curX = margin;
         int curY = margin;
         int rowH = 0;
-        int atlasW = MAX_ATLAS_WIDTH;
         List<PackRect> placed = new ArrayList<>();
 
         for (PackRect r : packRects) {
@@ -153,7 +195,9 @@ public class UvAtlasService {
 
         List<AreaUvRegionDto> areaDtos = new ArrayList<>();
         for (PackRect r : placed) {
-            g.drawImage(tile, r.px, r.py, r.pxW, r.pxH, null);
+            BufferedImage cropped = getCroppedTile(tile, r.pxW, r.pxH);
+            g.drawImage(cropped, r.px, r.py, r.pxW, r.pxH, null);
+
             double[] atlasUv = pixelRectToThreeJsUv(r.px, r.py, r.pxW, r.pxH, atlasW, atlasH);
             areaDtos.add(new AreaUvRegionDto(
                     r.areaId,
@@ -176,6 +220,60 @@ public class UvAtlasService {
         cachedLayout = new UvAtlasLayoutDto(atlasW, atlasH, "/api/uv-atlas/atlas.png", areaDtos);
 
         writeAtlasToResourcesIfPossible(png);
+    }
+
+    private BufferedImage getCroppedTile(BufferedImage tile, int targetW, int targetH) {
+        int srcW = tile.getWidth();
+        int srcH = tile.getHeight();
+
+        double srcAspect = (double) srcW / srcH;
+        double targetAspect = (double) targetW / targetH;
+
+        int cropW, cropH, cropX, cropY;
+
+        if (srcAspect > targetAspect) {
+            // Исходное изображение шире — обрезаем по бокам
+            cropH = srcH;
+            cropW = (int) Math.round(srcH * targetAspect);
+            cropX = (srcW - cropW) / 2;
+            cropY = 0;
+        } else {
+            // Исходное изображение выше — обрезаем сверху/снизу
+            cropW = srcW;
+            cropH = (int) Math.round(srcW / targetAspect);
+            cropX = 0;
+            cropY = (srcH - cropH) / 2;
+        }
+
+        cropW = Math.max(1, Math.min(cropW, srcW - cropX));
+        cropH = Math.max(1, Math.min(cropH, srcH - cropY));
+
+        return tile.getSubimage(cropX, cropY, cropW, cropH);
+    }
+
+    private static double calculateTriangleArea(float[] positions, int v0, int v1, int v2) {
+        float ax = positions[v0 * 3];
+        float ay = positions[v0 * 3 + 1];
+        float az = positions[v0 * 3 + 2];
+        float bx = positions[v1 * 3];
+        float by = positions[v1 * 3 + 1];
+        float bz = positions[v1 * 3 + 2];
+        float cx = positions[v2 * 3];
+        float cy = positions[v2 * 3 + 1];
+        float cz = positions[v2 * 3 + 2];
+
+        float abx = bx - ax;
+        float aby = by - ay;
+        float abz = bz - az;
+        float acx = cx - ax;
+        float acy = cy - ay;
+        float acz = cz - az;
+
+        float nx = aby * acz - abz * acy;
+        float ny = abz * acx - abx * acz;
+        float nz = abx * acy - aby * acx;
+
+        return 0.5 * Math.sqrt(nx * nx + ny * ny + nz * nz);
     }
 
     /**
@@ -230,12 +328,15 @@ public class UvAtlasService {
         final float meshVmax;
         final double uw;
         final double uh;
+        final double area3D;
+        final String region;
         int pxW;
         int pxH;
         int px;
         int py;
 
-        PackRect(int areaId, float meshUmin, float meshVmin, float meshUmax, float meshVmax, double uw, double uh) {
+        PackRect(int areaId, float meshUmin, float meshVmin, float meshUmax, float meshVmax, 
+                 double uw, double uh, double area3D, String region) {
             this.areaId = areaId;
             this.meshUmin = meshUmin;
             this.meshVmin = meshVmin;
@@ -243,6 +344,8 @@ public class UvAtlasService {
             this.meshVmax = meshVmax;
             this.uw = uw;
             this.uh = uh;
+            this.area3D = area3D;
+            this.region = region;
         }
     }
 }
