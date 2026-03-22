@@ -20,5 +20,7 @@ public class SphereArea {
         private double x;
         private double y;
         private double z;
+        private double phi;
+        private double theta;
     }
 }

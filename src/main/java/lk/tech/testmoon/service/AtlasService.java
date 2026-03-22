@@ -27,8 +27,8 @@ public class AtlasService {
     private final String atlasJsonPath;
     private final String tilesDirPath;
 
-    private static final int ATLAS_WIDTH = 2048;
-    private static final int ATLAS_HEIGHT = 1024;
+    private static final int ATLAS_WIDTH = 4000;
+    private static final int ATLAS_HEIGHT = 2000;
 
     public AtlasService(UserAreaRepository userAreaRepository,
                         @Value("${app.sphere-path:src/main/resources/sphere.json}") String sphereFilePath,
@@ -75,6 +75,7 @@ public class AtlasService {
                 double minTheta = Double.MAX_VALUE;
                 double maxTheta = Double.MIN_VALUE;
 
+                List<Double> thetas = new ArrayList<>();
                 for (Integer areaId : group.getAreaIds()) {
                     SphereArea area = sphereData.getAreas().stream()
                             .filter(a -> a.getAreaId() == areaId)
@@ -83,30 +84,67 @@ public class AtlasService {
                     if (area == null) continue;
 
                     for (SphereArea.Vertex v : area.getVertices()) {
-                        double phi = Math.acos(v.getY());
-                        double theta = Math.atan2(v.getZ(), v.getX());
-                        if (theta < 0) theta += 2 * Math.PI;
-
+                        double phi = v.getPhi();
+                        double theta = v.getTheta();
+                        
                         minPhi = Math.min(minPhi, phi);
                         maxPhi = Math.max(maxPhi, phi);
-                        minTheta = Math.min(minTheta, theta);
-                        maxTheta = Math.max(maxTheta, theta);
+                        thetas.add(theta);
                     }
                 }
 
-                // Correct for theta wrap-around (if max-min > PI, it probably wraps)
-                if (maxTheta - minTheta > Math.PI) {
-                    // This is a simple heuristic, but works for local groups.
-                    // For global groups, it might be more complex.
-                    // Let's assume groups don't wrap around for now.
+                if (thetas.isEmpty()) continue;
+
+                // Sort thetas to find the largest gap
+                thetas.sort(Double::compare);
+                
+                double largestGap = 0;
+                int largestGapIndex = -1;
+
+                for (int i = 0; i < thetas.size(); i++) {
+                    double t1 = thetas.get(i);
+                    double t2 = thetas.get((i + 1) % thetas.size());
+                    double gap = (t2 - t1 + 2 * Math.PI) % (2 * Math.PI);
+                    if (gap > largestGap) {
+                        largestGap = gap;
+                        largestGapIndex = i;
+                    }
+                }
+
+                // If largest gap is significant, it means the group wraps around
+                // But only if it's NOT the wrap-around gap (between last and first)
+                if (largestGap > Math.PI) {
+                    if (largestGapIndex == thetas.size() - 1) {
+                        // Largest gap is the one crossing 0. Group does NOT cross 0.
+                        minTheta = thetas.get(0);
+                        maxTheta = thetas.get(thetas.size() - 1);
+                    } else {
+                        // Largest gap is in the middle. Group DOES cross 0.
+                        minTheta = thetas.get(largestGapIndex + 1);
+                        maxTheta = thetas.get(largestGapIndex) + 2 * Math.PI;
+                    }
+                } else {
+                    // No large gap, assume it's a contiguous block or full row
+                    minTheta = thetas.get(0);
+                    maxTheta = thetas.get(thetas.size() - 1);
+                    // Special case: if it covers almost the whole row, make it exactly 0..2PI
+                    if (largestGap < 0.2 && (maxTheta - minTheta) > 1.8 * Math.PI) {
+                        minTheta = 0;
+                        maxTheta = 2 * Math.PI;
+                    }
                 }
 
                 // Map to atlas pixel coordinates
-                int x = (int) (minTheta / (2 * Math.PI) * ATLAS_WIDTH);
-                int y = (int) (minPhi / Math.PI * ATLAS_HEIGHT);
-                int w = (int) (maxTheta / (2 * Math.PI) * ATLAS_WIDTH) - x;
-                int h = (int) (maxPhi / Math.PI * ATLAS_HEIGHT) - y;
-                
+                double x_double = (minTheta / (2 * Math.PI) * ATLAS_WIDTH);
+                double y_double = (minPhi / Math.PI * ATLAS_HEIGHT);
+                double w_double = (maxTheta / (2 * Math.PI) * ATLAS_WIDTH) - x_double;
+                double h_double = (maxPhi / Math.PI * ATLAS_HEIGHT) - y_double;
+
+                int x = (int) x_double;
+                int y = (int) y_double;
+                int w = (int) w_double;
+                int h = (int) h_double;
+
                 if (w <= 0) w = 1;
                 if (h <= 0) h = 1;
 
@@ -115,11 +153,17 @@ public class AtlasService {
                     File tileFile = new File(tilesDirPath, group.getTile());
                     if (tileFile.exists()) {
                         BufferedImage tileImg = ImageIO.read(tileFile);
-                        g2d.drawImage(tileImg, x, y, w, h, null);
+                        
+                        // Draw with wrap-around support
+                        int drawX = x % ATLAS_WIDTH;
+                        g2d.drawImage(tileImg, drawX, y, w, h, null);
+                        if (drawX + w > ATLAS_WIDTH) {
+                            g2d.drawImage(tileImg, drawX - ATLAS_WIDTH, y, w, h, null);
+                        }
                         
                         Map<String, Object> info = new HashMap<>();
                         info.put("groupId", group.getGroupId());
-                        info.put("atlasCoords", Map.of("x", x, "y", y, "w", w, "h", h));
+                        info.put("atlasCoords", Map.of("x", drawX, "y", y, "w", w, "h", h));
                         atlasInfo.add(info);
                     }
                 } catch (IOException e) {

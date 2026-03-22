@@ -7,7 +7,7 @@
           "groupId": 1,
           "url": "https://google.com",
           "tile": "tile1.jpg",
-          "areaIds": [13,14,15,16,17,18]
+          "areaIds": [250]
         }
       ]
     },

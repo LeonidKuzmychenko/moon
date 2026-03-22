@@ -122,10 +122,9 @@
                 area.vertices.forEach((v, i) => {
                     vertices.push(v.x, v.y, v.z);
                     
-                    // Calculate UVs based on spherical coordinates
-                    let phi = Math.acos(v.y);
-                    let theta = Math.atan2(v.z, v.x);
-                    if (theta < 0) theta += 2 * Math.PI;
+                    // Use phi and theta from vertex for stable UV mapping
+                    let phi = v.phi;
+                    let theta = v.theta;
                     
                     uvs.push(theta / (2 * Math.PI), 1 - (phi / Math.PI));
 

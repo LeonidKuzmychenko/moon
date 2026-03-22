@@ -18,8 +18,8 @@ import java.util.stream.Collectors;
 @Service
 public class SphereService {
 
-    private static final int TOTAL_ROWS = 6;
-    private static final int TOTAL_COLS = 6;
+    private static final int TOTAL_ROWS = 25;
+    private static final int TOTAL_COLS = 25;
     private static final double RADIUS = 1.0;
 
     private final ObjectMapper objectMapper;
@@ -68,7 +68,7 @@ public class SphereService {
         double x = RADIUS * Math.sin(phi) * Math.cos(theta);
         double y = RADIUS * Math.cos(phi);
         double z = RADIUS * Math.sin(phi) * Math.sin(theta);
-        return new SphereArea.Vertex(x, y, z);
+        return new SphereArea.Vertex(x, y, z, phi, theta);
     }
 
     public Map<String, Object> getSphereWithUserData() {
