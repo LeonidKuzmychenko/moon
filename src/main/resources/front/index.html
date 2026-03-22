@@ -84,7 +84,8 @@
                 const uvIds = data.uvIds;
 
                 const textureLoader = new THREE.TextureLoader();
-                const texture = textureLoader.load('http://localhost:8080/generated/atlas.png');
+                // const texture = textureLoader.load('http://localhost:8080/generated/atlas.png');
+                const texture = textureLoader.load('atlas.png');
                 texture.colorSpace = THREE.SRGBColorSpace;
                 
                 const material = new THREE.MeshPhongMaterial({

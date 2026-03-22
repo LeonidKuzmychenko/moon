@@ -43,34 +43,81 @@ public class UvAtlasService {
         GltfModelReader reader = new GltfModelReader();
         GltfModel gltfModel = reader.read(resource.getURI());
 
-        if (gltfModel.getMeshModels().isEmpty()) {
-            throw new IOException("No meshes found in the GLB file");
-        }
-        MeshModel meshModel = gltfModel.getMeshModels().get(0);
-        MeshPrimitiveModel primitiveModel = meshModel.getMeshPrimitiveModels().get(0);
+        List<Float> allPositions = new ArrayList<>();
+        List<Float> allUvs = new ArrayList<>();
+        List<Integer> allIndices = new ArrayList<>();
+        List<Integer> allUvIds = new ArrayList<>();
 
-        AccessorModel positionAccessor = primitiveModel.getAttributes().get("POSITION");
-        AccessorModel uvAccessor = primitiveModel.getAttributes().get("TEXCOORD_0");
-        AccessorModel indexAccessor = primitiveModel.getIndices();
+        int vertexOffset = 0;
+        int currentUvId = 1;
 
-        float[] positions = getFloatArray(positionAccessor);
-        float[] uvs = getFloatArray(uvAccessor);
-        int[] indices = getIntArray(indexAccessor);
+        for (MeshModel meshModel : gltfModel.getMeshModels()) {
+            String name = meshModel.getName();
+            if (name == null) continue;
 
-        // Assign uvId to each face (triangle)
-        int numFaces = indices.length / 3;
-        int[] uvIds = new int[numFaces];
-        for (int i = 0; i < numFaces; i++) {
-            uvIds[i] = i + 1; // 1-based IDs
+            for (MeshPrimitiveModel primitiveModel : meshModel.getMeshPrimitiveModels()) {
+                AccessorModel positionAccessor = primitiveModel.getAttributes().get("POSITION");
+                AccessorModel uvAccessor = primitiveModel.getAttributes().get("TEXCOORD_0");
+                AccessorModel indexAccessor = primitiveModel.getIndices();
+
+                float[] positions = getFloatArray(positionAccessor);
+                float[] uvs = getFloatArray(uvAccessor);
+                int[] indices = getIntArray(indexAccessor);
+
+                // Add positions and UVs
+                for (float p : positions) allPositions.add(p);
+                for (float u : uvs) allUvs.add(u);
+
+                // Add indices with offset
+                for (int index : indices) {
+                    allIndices.add(index + vertexOffset);
+                }
+
+                int numFaces = indices.length / 3;
+                if (name.equalsIgnoreCase("North")) {
+                    // All triangles in North have the same uvId
+                    for (int i = 0; i < numFaces; i++) {
+                        allUvIds.add(currentUvId);
+                    }
+                    currentUvId++;
+                } else if (name.equalsIgnoreCase("South")) {
+                    // All triangles in South have the same uvId
+                    for (int i = 0; i < numFaces; i++) {
+                        allUvIds.add(currentUvId);
+                    }
+                    currentUvId++;
+                } else if (name.equalsIgnoreCase("Sphere")) {
+                    // Every 2 triangles (quad) have the same uvId
+                    for (int i = 0; i < numFaces; i++) {
+                        allUvIds.add(currentUvId + (i / 2));
+                    }
+                    currentUvId += (numFaces + 1) / 2;
+                } else {
+                    // Default behavior for other groups if any
+                    for (int i = 0; i < numFaces; i++) {
+                        allUvIds.add(currentUvId++);
+                    }
+                }
+
+                vertexOffset += positions.length / 3;
+            }
         }
 
         MoonModelData data = new MoonModelData();
-        data.setPositions(positions);
-        data.setUv(uvs);
-        data.setIndices(indices);
-        data.setUvIds(uvIds);
+        data.setPositions(floatListToArray(allPositions));
+        data.setUv(floatListToArray(allUvs));
+        data.setIndices(allIndices.stream().mapToInt(Integer::intValue).toArray());
+        data.setUvIds(allUvIds.stream().mapToInt(Integer::intValue).toArray());
 
         return data;
+    }
+
+    private float[] floatListToArray(List<Float> list) {
+        float[] array = new float[list.size()];
+        for (int i = 0; i < list.size(); i++) {
+            array[i] = list.get(i);
+        }
+        return array;
     }
 
     public void generateAtlas(MoonModelData data) throws IOException {
@@ -89,7 +136,10 @@ public class UvAtlasService {
         int[] indices = data.getIndices();
         float[] uvs = data.getUv();
 
+        int[] uvIds = data.getUvIds();
+
         for (int i = 0; i < indices.length; i += 3) {
+            int faceIndex = i / 3;
             int i1 = indices[i];
             int i2 = indices[i + 1];
             int i3 = indices[i + 2];
@@ -121,7 +171,7 @@ public class UvAtlasService {
             g2d.setFont(new Font("Arial", Font.PLAIN, 10));
             int centerX = (int)((u1 + u2 + u3) / 3.0 * ATLAS_WIDTH);
             int centerY = (int)((1 - (v1 + v2 + v3) / 3.0) * ATLAS_HEIGHT);
-            g2d.drawString(String.valueOf(i / 3 + 1), centerX, centerY);
+            g2d.drawString(String.valueOf(uvIds[faceIndex]), centerX, centerY);
         }
 
         g2d.dispose();
