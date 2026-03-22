@@ -1,282 +1,140 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <title>Sphere UV Atlas</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Moon Atlas</title>
     <style>
-        html, body {
-            margin: 0;
-            width: 100%;
-            height: 100%;
-            overflow: hidden;
-            background: #000;
-        }
-        #area-tooltip {
-            position: fixed;
-            left: 0;
-            top: 0;
-            transform: translate(12px, 12px);
-            padding: 6px 8px;
-            border-radius: 6px;
-            background: rgba(0, 0, 0, 0.8);
-            color: #fff;
-            font: 12px/1.2 monospace;
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
             pointer-events: none;
             display: none;
-            z-index: 10;
-            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        #controls-info {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: #aaa;
+            font-size: 12px;
         }
     </style>
 </head>
 <body>
-<div id="area-tooltip"></div>
-
-<script type="module">
-    import * as THREE from 'https://esm.sh/three@0.160.0';
-    import { OrbitControls } from 'https://esm.sh/three@0.160.0/examples/jsm/controls/OrbitControls.js';
-
-    const BASE = 'http://localhost:8080';
-
-    const toJsArray = (value) => {
-        if (Array.isArray(value)) return value;
-        if (ArrayBuffer.isView(value)) return Array.from(value);
-        return null;
-    };
-
-    function normalizeMeshData(payload) {
-        const positions = toJsArray(payload?.positions ?? payload?.vertices);
-        const quads = toJsArray(payload?.quads ?? payload?.faces);
-        const normals = toJsArray(payload?.normals ?? []);
-        const uvs = toJsArray(payload?.uvs ?? []);
-        const areaIds = toJsArray(payload?.areaIds ?? payload?.tileIds ?? []);
-
-        if (!positions || !quads) {
-            const keys = payload && typeof payload === 'object'
-                ? Object.keys(payload).join(', ')
-                : String(payload);
-            throw new Error(`Invalid mesh data: expected positions/quads, got keys: ${keys}`);
+    <div id="info">uvId: <span id="uvId"></span></div>
+    <div id="controls-info">Rotate: Left Mouse | Zoom: Scroll | Pan: Right Mouse</div>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
         }
-        if (positions.length % 3 !== 0) {
-            throw new Error(`Invalid positions length: ${positions.length}`);
+    </script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, controls, raycaster, mouse;
+        let moonMesh, infoDiv, uvIdSpan;
+
+        init();
+
+        async function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.z = 2;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.enableDamping = true;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+            scene.add(ambientLight);
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+            directionalLight.position.set(5, 5, 5);
+            scene.add(directionalLight);
+
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+            infoDiv = document.getElementById('info');
+            uvIdSpan = document.getElementById('uvId');
+
+            try {
+                const response = await fetch('http://localhost:8080/api/moon/data');
+                const data = await response.json();
+
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(data.positions), 3));
+                geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(data.uv), 2));
+                geometry.setIndex(new THREE.BufferAttribute(new Uint32Array(data.indices), 1));
+
+                // Add uvId as a custom attribute for easier lookup during raycasting
+                // Since we have one uvId per face (3 indices), we'll store it in the mesh data
+                const uvIds = data.uvIds;
+
+                const textureLoader = new THREE.TextureLoader();
+                const texture = textureLoader.load('http://localhost:8080/generated/atlas.png');
+                texture.colorSpace = THREE.SRGBColorSpace;
+                
+                const material = new THREE.MeshPhongMaterial({
+                    map: texture,
+                    side: THREE.DoubleSide
+                });
+
+                moonMesh = new THREE.Mesh(geometry, material);
+                moonMesh.userData.uvIds = uvIds; // Store for lookup
+                scene.add(moonMesh);
+
+                window.addEventListener('mousemove', onMouseMove);
+                animate();
+            } catch (error) {
+                console.error('Error loading model data:', error);
+            }
         }
-        if (quads.length % 4 !== 0) {
-            throw new Error(`Invalid quads length: ${quads.length}`);
-        }
-        const vCount = positions.length / 3;
-        if (uvs.length > 0 && uvs.length !== vCount * 2) {
-            throw new Error(`Invalid uvs length: expected ${vCount * 2}, got ${uvs.length}`);
-        }
-        if (normals.length > 0 && normals.length !== positions.length) {
-            throw new Error(
-                `Invalid normals length: positions=${positions.length}, normals=${normals.length}`
-            );
-        }
-        if (areaIds.length > 0 && areaIds.length !== quads.length / 4) {
-            throw new Error(
-                `Invalid areaIds length: areaIds=${areaIds.length}, quads=${quads.length / 4}`
-            );
-        }
 
-        return { positions, quads, normals, uvs, areaIds };
-    }
+        function onMouseMove(event) {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
-    /** mesh UV → UV в атласе (поля из JSON как у Jackson для record) */
-    function meshUvToAtlas(u, v, region) {
-        const meshUmin = region.meshUmin ?? region.meshUMin;
-        const meshVmin = region.meshVmin ?? region.meshVMin;
-        const meshUmax = region.meshUmax ?? region.meshUMax;
-        const meshVmax = region.meshVmax ?? region.meshVMax;
-        const atlasUmin = region.atlasUmin ?? region.atlasUMin;
-        const atlasVmin = region.atlasVmin ?? region.atlasVMin;
-        const atlasUmax = region.atlasUmax ?? region.atlasUMax;
-        const atlasVmax = region.atlasVmax ?? region.atlasVMax;
+            if (moonMesh) {
+                raycaster.setFromCamera(mouse, camera);
+                const intersects = raycaster.intersectObject(moonMesh);
 
-        const du = meshUmax - meshUmin;
-        const dv = meshVmax - meshVmin;
-        const nu = du > 1e-10 ? (u - meshUmin) / du : 0.5;
-        const nv = dv > 1e-10 ? (v - meshVmin) / dv : 0.5;
-        const uu = atlasUmin + nu * (atlasUmax - atlasUmin);
-        const vv = atlasVmin + nv * (atlasVmax - atlasVmin);
-        return [uu, vv];
-    }
-
-    function buildExpandedMeshWithAtlasUv(meshData, areaMap) {
-        const positions = meshData.positions;
-        const uvs = meshData.uvs;
-        const quads = meshData.quads;
-        const areaIds = meshData.areaIds;
-
-        const pos = [];
-        const uvOut = [];
-        const triangleAreaIds = [];
-
-        for (let i = 0; i < quads.length; i += 4) {
-            const q = i / 4;
-            const areaId = areaIds.length > 0 ? areaIds[q] : q;
-            const region = areaMap.get(areaId);
-            const a = quads[i];
-            const b = quads[i + 1];
-            const c = quads[i + 2];
-            const d = quads[i + 3];
-
-            function pushTri(i0, i1, i2) {
-                for (const vidx of [i0, i1, i2]) {
-                    pos.push(
-                        positions[vidx * 3],
-                        positions[vidx * 3 + 1],
-                        positions[vidx * 3 + 2]
-                    );
-                    if (uvs.length === 0) {
-                        uvOut.push(0, 0);
-                    } else if (region) {
-                        const u = uvs[vidx * 2];
-                        const v = uvs[vidx * 2 + 1];
-                        const [au, av] = meshUvToAtlas(u, v, region);
-                        uvOut.push(au, av);
-                    } else {
-                        const u = uvs[vidx * 2];
-                        const v = uvs[vidx * 2 + 1];
-                        uvOut.push(u, v);
-                    }
+                if (intersects.length > 0) {
+                    const faceIndex = intersects[0].faceIndex;
+                    const uvId = moonMesh.userData.uvIds[faceIndex];
+                    uvIdSpan.textContent = uvId;
+                    infoDiv.style.display = 'block';
+                    infoDiv.style.left = (event.clientX + 10) + 'px';
+                    infoDiv.style.top = (event.clientY + 10) + 'px';
+                } else {
+                    infoDiv.style.display = 'none';
                 }
-                triangleAreaIds.push(areaId);
-            }
-
-            pushTri(a, b, c);
-            if (c !== d) {
-                pushTri(a, c, d);
             }
         }
 
-        return {
-            position: new Float32Array(pos),
-            uv: new Float32Array(uvOut),
-            triangleAreaIds
-        };
-    }
-
-    const [meshRes, layoutRes] = await Promise.all([
-        fetch(`${BASE}/sphere`),
-        fetch(`${BASE}/api/uv-atlas/layout`)
-    ]);
-
-    if (!meshRes.ok) {
-        throw new Error(`Sphere API failed: ${meshRes.status}`);
-    }
-    if (!layoutRes.ok) {
-        throw new Error(`UV layout API failed: ${layoutRes.status}`);
-    }
-
-    const data = await meshRes.json();
-    const layout = await layoutRes.json();
-
-    const meshData = normalizeMeshData(data);
-    const areaMap = new Map();
-    for (const a of layout.areas ?? []) {
-        areaMap.set(a.areaId, a);
-    }
-
-    const { position, uv, triangleAreaIds } = buildExpandedMeshWithAtlasUv(meshData, areaMap);
-
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111);
-
-    const camera = new THREE.PerspectiveCamera(
-        75,
-        window.innerWidth / window.innerHeight,
-        0.1,
-        1000
-    );
-    camera.position.set(0, 0, 3);
-
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.outputColorSpace = THREE.SRGBColorSpace;
-    document.body.appendChild(renderer.domElement);
-
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.enablePan = false;
-
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-    dirLight.position.set(5, 5, 5);
-    scene.add(dirLight);
-
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.BufferAttribute(position, 3));
-    geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    geometry.computeVertexNormals();
-
-    const textureLoader = new THREE.TextureLoader();
-    const atlasUrl = layout.atlasUrl?.startsWith('http')
-        ? layout.atlasUrl
-        : `${BASE}${layout.atlasUrl ?? '/api/uv-atlas/atlas.png'}`;
-    const texture = await (typeof textureLoader.loadAsync === 'function'
-        ? textureLoader.loadAsync(atlasUrl)
-        : new Promise((resolve, reject) => {
-            textureLoader.load(atlasUrl, resolve, undefined, reject);
-        }));
-    texture.colorSpace = THREE.SRGBColorSpace;
-    texture.flipY = false;
-
-    const triangleCount = triangleAreaIds.length;
-    const vertexCount = position.length / 3;
-    if (vertexCount !== triangleCount * 3) {
-        throw new Error('vertex / triangle mismatch');
-    }
-
-    const material = new THREE.MeshBasicMaterial({
-        map: texture,
-        side: THREE.DoubleSide
-    });
-
-    const mesh = new THREE.Mesh(geometry, material);
-    scene.add(mesh);
-
-    const tooltip = document.getElementById('area-tooltip');
-    const raycaster = new THREE.Raycaster();
-    const pointer = new THREE.Vector2();
-
-    window.addEventListener('mousemove', (event) => {
-        pointer.x = (event.clientX / window.innerWidth) * 2 - 1;
-        pointer.y = -(event.clientY / window.innerHeight) * 2 + 1;
-        raycaster.setFromCamera(pointer, camera);
-        const hit = raycaster.intersectObject(mesh, false)[0];
-
-        if (!hit || hit.faceIndex == null) {
-            tooltip.style.display = 'none';
-            return;
+        function animate() {
+            requestAnimationFrame(animate);
+            controls.update();
+            renderer.render(scene, camera);
         }
 
-        const areaId = triangleAreaIds[hit.faceIndex];
-        tooltip.textContent = `areaId: ${areaId}`;
-        tooltip.style.left = `${event.clientX}px`;
-        tooltip.style.top = `${event.clientY}px`;
-        tooltip.style.display = 'block';
-    });
-
-    geometry.computeBoundingSphere();
-    if (geometry.boundingSphere) {
-        const r = geometry.boundingSphere.radius;
-        camera.position.set(0, 0, r * 2.5);
-        controls.update();
-    }
-
-    function animate() {
-        requestAnimationFrame(animate);
-        controls.update();
-        renderer.render(scene, camera);
-    }
-    animate();
-
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-</script>
-
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
 </body>
 </html>
