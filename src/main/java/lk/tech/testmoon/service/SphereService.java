@@ -1,84 +1,139 @@
 package lk.tech.testmoon.service;
 
-import lk.tech.testmoon.model.SphereElement;
-import lk.tech.testmoon.model.SphereInfo;
-import lk.tech.testmoon.model.UserAreasWrapper;
-import lk.tech.testmoon.repository.UserAreasRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lk.tech.testmoon.model.SphereArea;
+import lk.tech.testmoon.model.SphereData;
+import lk.tech.testmoon.model.UserAreaConfig;
+import lk.tech.testmoon.repository.UserAreaRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
-import tools.jackson.databind.ObjectMapper;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @Service
 public class SphereService {
 
-    private final UserAreasRepository userAreasRepository;
+    private static final int TOTAL_ROWS = 25;
+    private static final int TOTAL_COLS = 25;
+    private static final double CAP_PERCENT = 0.05;
+    private static final double RADIUS = 1.0;
+
     private final ObjectMapper objectMapper;
+    private final UserAreaRepository userAreaRepository;
+    private final String sphereFilePath;
 
-    @Value("${sphere.json.path:src/main/resources/sphere/sphere.json}")
-    private String sphereJsonPath;
-
-    public SphereService(UserAreasRepository userAreasRepository, ObjectMapper objectMapper) {
-        this.userAreasRepository = userAreasRepository;
-        this.objectMapper = objectMapper;
+    public SphereService(UserAreaRepository userAreaRepository,
+                         @Value("${app.sphere-path:src/main/resources/sphere.json}") String sphereFilePath) {
+        this.objectMapper = new ObjectMapper();
+        this.userAreaRepository = userAreaRepository;
+        this.sphereFilePath = sphereFilePath;
     }
 
-    public void generateSphereLayout() throws IOException {
-        int rows = 40; // Total vertical rows (latitude)
-        int maxSegmentsAtEquator = 80;
-        double reductionCoefficient = 1.0; // Adjustable coefficient for reduction towards poles
-        
-        List<SphereElement> elements = new ArrayList<>();
-        int currentAreaId = 1;
+    public void generateSphere() {
+        List<SphereArea> areas = new ArrayList<>();
+        int areaIdCounter = 1;
+        int capRows = (int) Math.ceil(TOTAL_ROWS * CAP_PERCENT);
 
-        for (int i = 0; i <= rows; i++) {
-            double lat = -Math.PI / 2.0 + (double) i * Math.PI / rows;
-            
-            // Calculate segments in this row. Use cos(lat) to reduce count towards poles.
-            int n = (int) Math.max(1, maxSegmentsAtEquator * Math.cos(lat) * reductionCoefficient);
-            
-            String type = (i == 0 || i == rows) ? "circle" : "rect";
-            
-            for (int j = 0; j < n; j++) {
-                double lon = (double) j * 2.0 * Math.PI / n;
-                
-                SphereElement element = new SphereElement();
-                element.setAreaId(currentAreaId++);
-                element.setType(type);
-                element.setLat(lat);
-                element.setLon(lon);
-                
-                // Approximate width and height in radians
-                element.setWidth(2.0 * Math.PI / n);
-                element.setHeight(Math.PI / rows);
-                
-                elements.add(element);
+        for (int r = 0; r < TOTAL_ROWS; r++) {
+            boolean isCap = (r < capRows) || (r >= TOTAL_ROWS - capRows);
+
+            if (isCap) {
+                // Single polygon for the whole row
+                List<SphereArea.Vertex> vertices = new ArrayList<>();
+                double phi1 = (double) r / TOTAL_ROWS * Math.PI;
+                double phi2 = (double) (r + 1) / TOTAL_ROWS * Math.PI;
+
+                // Points at phi1
+                for (int c = 0; c <= TOTAL_COLS; c++) {
+                    double theta = (double) c / TOTAL_COLS * 2 * Math.PI;
+                    vertices.add(calculateVertex(phi1, theta));
+                }
+                // Points at phi2 (reverse order to keep polygon consistent)
+                for (int c = TOTAL_COLS; c >= 0; c--) {
+                    double theta = (double) c / TOTAL_COLS * 2 * Math.PI;
+                    vertices.add(calculateVertex(phi2, theta));
+                }
+                areas.add(new SphereArea(areaIdCounter++, vertices));
+            } else {
+                // Regular grid of rectangles
+                for (int c = 0; c < TOTAL_COLS; c++) {
+                    List<SphereArea.Vertex> vertices = new ArrayList<>();
+                    double phi1 = (double) r / TOTAL_ROWS * Math.PI;
+                    double phi2 = (double) (r + 1) / TOTAL_ROWS * Math.PI;
+                    double theta1 = (double) c / TOTAL_COLS * 2 * Math.PI;
+                    double theta2 = (double) (c + 1) / TOTAL_COLS * 2 * Math.PI;
+
+                    vertices.add(calculateVertex(phi1, theta1));
+                    vertices.add(calculateVertex(phi1, theta2));
+                    vertices.add(calculateVertex(phi2, theta2));
+                    vertices.add(calculateVertex(phi2, theta1));
+
+                    areas.add(new SphereArea(areaIdCounter++, vertices));
+                }
             }
         }
 
-        SphereInfo sphereInfo = new SphereInfo(elements);
-        objectMapper.writeValue(new File(sphereJsonPath), sphereInfo);
+        SphereData data = new SphereData();
+        data.setAreas(areas);
+
+        try {
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(new File(sphereFilePath), data);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not save sphere.json", e);
+        }
     }
 
-    public Map<String, Object> getCombinedData() throws IOException {
-        File sphereFile = new File(sphereJsonPath);
-        if (!sphereFile.exists()) {
-            generateSphereLayout();
+    private SphereArea.Vertex calculateVertex(double phi, double theta) {
+        double x = RADIUS * Math.sin(phi) * Math.cos(theta);
+        double y = RADIUS * Math.cos(phi);
+        double z = RADIUS * Math.sin(phi) * Math.sin(theta);
+        return new SphereArea.Vertex(x, y, z);
+    }
+
+    public Map<String, Object> getSphereWithUserData() {
+        SphereData sphereData;
+        try {
+            File file = new File(sphereFilePath);
+            if (!file.exists()) {
+                generateSphere();
+            }
+            sphereData = objectMapper.readValue(file, SphereData.class);
+        } catch (IOException e) {
+            throw new RuntimeException("Could not read sphere.json", e);
         }
+
+        UserAreaConfig userConfig = userAreaRepository.read();
         
-        SphereInfo sphereInfo = objectMapper.readValue(sphereFile, SphereInfo.class);
-        UserAreasWrapper userAreas = userAreasRepository.read();
-        
-        Map<String, Object> response = new HashMap<>();
-        response.put("sphere", sphereInfo);
-        response.put("userAreas", userAreas);
-        
-        return response;
+        // Flatten user groups to map areaId -> group info
+        Map<Integer, Map<String, Object>> areaToGroupMap = (userConfig.getUsers() == null ? new ArrayList<lk.tech.testmoon.model.User>() : userConfig.getUsers()).stream()
+                .flatMap(u -> (u.getGroups() == null ? new ArrayList<lk.tech.testmoon.model.UserGroup>() : u.getGroups()).stream().map(g -> Map.entry(u.getUserId(), g)))
+                .flatMap(entry -> entry.getValue().getAreaIds().stream()
+                        .map(areaId -> {
+                            Map<String, Object> data = new java.util.HashMap<>();
+                            data.put("userId", entry.getKey());
+                            data.put("groupId", entry.getValue().getGroupId());
+                            data.put("url", entry.getValue().getUrl());
+                            data.put("tile", entry.getValue().getTile());
+                            return Map.entry(areaId, data);
+                        }))
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (v1, v2) -> v1));
+
+        return Map.of(
+                "areas", sphereData.getAreas().stream().map(area -> {
+                    Map<String, Object> areaMap = new java.util.HashMap<>(Map.of(
+                            "areaId", area.getAreaId(),
+                            "vertices", area.getVertices()
+                    ));
+                    if (areaToGroupMap.containsKey(area.getAreaId())) {
+                        areaMap.putAll(areaToGroupMap.get(area.getAreaId()));
+                    }
+                    return areaMap;
+                }).toList()
+        );
     }
 }

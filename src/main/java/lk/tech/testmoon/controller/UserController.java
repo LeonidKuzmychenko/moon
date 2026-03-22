@@ -2,6 +2,8 @@ package lk.tech.testmoon.controller;
 
 import lk.tech.testmoon.model.User;
 import lk.tech.testmoon.service.UserService;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -10,34 +12,38 @@ import java.util.List;
 @RequestMapping("/users")
 public class UserController {
 
-    private final UserService service;
+    private final UserService userService;
 
-    public UserController(UserService service) {
-        this.service = service;
+    public UserController(UserService userService) {
+        this.userService = userService;
     }
 
     @GetMapping
     public List<User> getAllUsers() {
-        return service.getAllUsers();
+        return userService.getAllUsers();
     }
 
     @GetMapping("/{userId}")
-    public User getUserById(@PathVariable int userId) {
-        return service.getUserById(userId).orElseThrow(() -> new RuntimeException("User not found"));
+    public ResponseEntity<User> getUserById(@PathVariable Long userId) {
+        return userService.getUserById(userId)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
     public User createUser(@RequestBody User user) {
-        return service.createUser(user);
+        return userService.createUser(user);
     }
 
     @PutMapping("/{userId}")
-    public User updateUser(@PathVariable int userId, @RequestBody User user) {
-        return service.updateUser(userId, user);
+    public User updateUser(@PathVariable Long userId, @RequestBody User user) {
+        return userService.updateUser(userId, user);
     }
 
     @DeleteMapping("/{userId}")
-    public void deleteUser(@PathVariable int userId) {
-        service.deleteUser(userId);
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteUser(@PathVariable Long userId) {
+        userService.deleteUser(userId);
     }
 }

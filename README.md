@@ -1,59 +1,97 @@
-# Moon Sphere Viewer
+# Test Moon Project
 
-Проєкт для візуалізації сфери з накладеними на неї зображеннями (тайлами) користувачів. Реалізовано на **Java 21 + Spring Boot 4** (бекенд) та **HTML/JS + Three.js** (фронтенд).
+Цей проект реалізує бекенд на Spring Boot та фронтенд на Three.js для візуалізації 3D сфери з інтерактивними областями, які мапуються на атлас зображень.
 
-## Архітектура
+## Технологічний стек
 
-### Бекенд (Spring Boot)
+- **Бекенд**: Java 21, Spring Boot 3+, Jackson (для роботи з JSON), AWT (для генерації атласу).
+- **Фронтенд**: HTML5, CSS3, JavaScript (ES6+), Three.js (через CDN).
 
-#### Структура даних
-Дані зберігаються у файлі `src/main/resources/user/userAreas.json`:
-- `users`: Список користувачів.
-- `groups`: Групи кожного користувача, що містять:
-  - `groupId`: Унікальний ID групи.
-  - `url`: Посилання для відкриття при кліку.
-  - `tile`: Назва файлу зображення (з папки `resources/tiles`).
-  - `areaIds`: Список ID областей на сфері, де має бути відображене зображення.
+---
 
-#### Контролери
-- **UserController**: CRUD операції для користувачів.
-- **UserGroupController**: CRUD операції для груп користувачів.
-- **AtlasController**:
-  - `POST /atlas`: Збирає всі тайли з `userAreas.json` в один великий `atlas.png` та створює `atlas.json` з координатами кожного тайлу.
-  - `GET /atlas`: Повертає згенерований `atlas.png`.
-  - `GET /atlas/info`: Повертає `atlas.json`.
-- **SphereController**:
-  - `POST /sphere`: Генерує розмітку сфери (прямокутники та кола на полюсах) та зберігає в `sphere.json`. Кількість елементів у рядах зменшується при наближенні до полюсів для збереження розміру.
-  - `GET /sphere`: Повертає об'єднані дані з `sphere.json` та `userAreas.json` для фронтенду.
+## Бекенд Структура
 
-### Фронтенд (Three.js)
+### Моделі Даних
 
-1. **Завантаження даних**: Отримує розмітку сфери та дані користувачів через API.
-2. **Генерація атласу**: Використовує `atlas.png` та `atlas.json` для вирізання потрібних частин зображень.
-3. **Візуалізація**:
-   - Створює сферу в Three.js.
-   - Динамічно малює текстуру на Canvas, розраховуючи bounding box для кожної групи `areaIds`.
-   - Накладає Canvas як текстуру на сферу.
-4. **Інтерактивність**:
-   - **Hover**: При наведенні на область відображається `groupId`, `areaId` та `url`.
-   - **Click**: При натисканні відкривається `url` у новій вкладці.
+- `UserAreaConfig`: Кореневий об'єкт для `userAreas.json`.
+- `User`: Об'єкт користувача з ID та списком груп.
+- `UserGroup`: Група з `groupId`, `url`, назвою тайлу (`tile`) та списком `areaIds`.
+- `SphereArea`: Область на сфері з унікальним `areaId` та списком 3D вершин.
+- `SphereData`: Кореневий об'єкт для `sphere.json`.
+
+### Контролери та Ендпоінти
+
+#### 1. UserController (`/users`)
+- `GET /users`: Отримати список усіх користувачів.
+- `GET /users/{userId}`: Отримати користувача за ID.
+- `POST /users`: Створити нового користувача.
+- `PUT /users/{userId}`: Оновити дані користувача.
+- `DELETE /users/{userId}`: Видалити користувача.
+
+#### 2. UserGroupController (`/users/{userId}/groups`)
+- `GET /users/{userId}/groups`: Отримати групи користувача.
+- `GET /users/{userId}/groups/{groupId}`: Отримати конкретну групу.
+- `POST /users/{userId}/groups`: Додати нову групу користувачу.
+- `PUT /users/{userId}/groups/{groupId}`: Оновити групу.
+- `DELETE /users/{userId}/groups/{groupId}`: Видалити групу.
+
+#### 3. SphereController (`/sphere`)
+- `POST /sphere`: Генерує розметку сфери (25x25). 
+  - Перші та останні 5% рядів стають цільними багатокутниками (полярні шапки).
+  - Результат зберігається у `resources/sphere.json`.
+- `GET /sphere`: Повертає об'єднані дані з `sphere.json` та `userAreas.json` для фронтенду.
+
+#### 4. AtlasController (`/atlas`)
+- `POST /atlas`: Формує `atlas.png` та `atlas.json`.
+  - Знаходить крайні координати для кожної групи на основі `areaIds`.
+  - Розтягує відповідний тайл з `resources/tiles` на отриману область в атласі.
+- `GET /atlas`: Повертає файл `atlas.png`.
+- `GET /atlas/info`: Повертає метадані `atlas.json`.
+
+---
+
+## Фронтенд (Three.js)
+
+Знаходиться у `src/main/resources/front/index.html`.
+
+### Функціональність:
+1. **Візуалізація**: Сфера будується з окремих мешів для кожного `areaId`.
+2. **Текстурування**: Використовується `atlas.png` як єдина текстура. UV-координати кожної вершини розраховуються на основі сферичних координат (phi, theta).
+3. **Інтерактивність**:
+   - **Hover**: При наведенні на область відображається `areaId`. Якщо область належить групі, додаються `groupId` та `url`.
+   - **Click**: Якщо область має `url`, при кліку вона відкривається в новій вкладці.
+4. **Управління**: Використовується `OrbitControls` для обертання та масштабування сфери.
+
+---
 
 ## Як запустити
 
-1. **Вимоги**: Java 21.
-2. **Збірка та запуск**:
+1. **Вимоги**: Java 21, Gradle.
+2. **Збірка**:
+   ```bash
+   ./gradlew build
+   ```
+3. **Запуск**:
    ```bash
    ./gradlew bootRun
    ```
-3. **Ініціалізація даних**:
-   Після запуску необхідно згенерувати атлас та розмітку сфери (якщо вони ще не згенеровані):
-   ```bash
-   curl -X POST http://localhost:8080/atlas
-   curl -X POST http://localhost:8080/sphere
-   ```
-4. **Перегляд**: Відкрийте браузер за адресою `http://localhost:8080/`.
+4. **Підготовка даних**:
+   Після запуску необхідно ініціалізувати сферу та атлас (якщо файли ще не створені):
+   - `POST http://localhost:8080/sphere`
+   - `POST http://localhost:8080/atlas`
+5. **Перегляд**:
+   Відкрийте в браузері `http://localhost:8080/`.
 
-## Формули
-Для рівномірного розподілу квадратів по сфері використовується формула:
-`n = maxSegmentsAtEquator * cos(lat)`
-де `lat` — широта від -π/2 до π/2. Це забезпечує зменшення кількості елементів при наближенні до полюсів.
+---
+
+## Конфігурація
+
+Параметри шляхів до файлів можна змінити в `src/main/resources/application.yml`:
+```yaml
+app:
+  user-areas-path: src/main/resources/user/userAreas.json
+  sphere-path: src/main/resources/sphere.json
+  atlas-png-path: src/main/resources/atlas/atlas.png
+  atlas-json-path: src/main/resources/atlas/atlas.json
+  tiles-dir-path: src/main/resources/tiles
+```

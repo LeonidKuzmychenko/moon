@@ -1,9 +1,9 @@
 package lk.tech.testmoon.service;
 
 import lk.tech.testmoon.model.User;
-import lk.tech.testmoon.model.UserAreasWrapper;
+import lk.tech.testmoon.model.UserAreaConfig;
 import lk.tech.testmoon.model.UserGroup;
-import lk.tech.testmoon.repository.UserAreasRepository;
+import lk.tech.testmoon.repository.UserAreaRepository;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -13,74 +13,84 @@ import java.util.Optional;
 @Service
 public class UserGroupService {
 
-    private final UserAreasRepository repository;
+    private final UserAreaRepository repository;
 
-    public UserGroupService(UserAreasRepository repository) {
+    public UserGroupService(UserAreaRepository repository) {
         this.repository = repository;
     }
 
-    public List<UserGroup> getGroupsByUserId(int userId) {
-        return repository.read().getUsers().stream()
-                .filter(u -> u.getUserId() == userId)
+    public List<UserGroup> getGroupsForUser(Long userId) {
+        UserAreaConfig config = repository.read();
+        if (config.getUsers() == null) return new ArrayList<>();
+        return config.getUsers().stream()
+                .filter(u -> u.getUserId().equals(userId))
                 .findFirst()
                 .map(User::getGroups)
                 .orElse(new ArrayList<>());
     }
 
-    public Optional<UserGroup> getGroupById(int userId, int groupId) {
-        return getGroupsByUserId(userId).stream()
-                .filter(g -> g.getGroupId() == groupId)
+    public Optional<UserGroup> getGroupById(Long userId, Long groupId) {
+        return getGroupsForUser(userId).stream()
+                .filter(g -> g.getGroupId().equals(groupId))
                 .findFirst();
     }
 
-    public UserGroup createGroup(int userId, UserGroup group) {
-        UserAreasWrapper wrapper = repository.read();
-        User user = wrapper.getUsers().stream()
-                .filter(u -> u.getUserId() == userId)
-                .findFirst()
-                .orElseThrow(() -> new RuntimeException("User not found: " + userId));
-        
-        if (user.getGroups() == null) {
-            user.setGroups(new ArrayList<>());
+    public UserGroup createGroup(Long userId, UserGroup group) {
+        UserAreaConfig config = repository.read();
+        List<User> users = config.getUsers();
+        if (users == null) {
+            users = new ArrayList<>();
+            config.setUsers(users);
         }
-        user.getGroups().add(group);
-        repository.save(wrapper);
-        return group;
-    }
-
-    public UserGroup updateGroup(int userId, int groupId, UserGroup groupDetails) {
-        UserAreasWrapper wrapper = repository.read();
-        User user = wrapper.getUsers().stream()
-                .filter(u -> u.getUserId() == userId)
-                .findFirst()
-                .orElseThrow(() -> new RuntimeException("User not found: " + userId));
-
-        List<UserGroup> groups = user.getGroups();
-        for (int i = 0; i < groups.size(); i++) {
-            if (groups.get(i).getGroupId() == groupId) {
-                groupDetails.setGroupId(groupId);
-                groups.set(i, groupDetails);
-                repository.save(wrapper);
-                return groupDetails;
+        for (User user : users) {
+            if (user.getUserId().equals(userId)) {
+                if (user.getGroups() == null) {
+                    user.setGroups(new ArrayList<>());
+                }
+                user.getGroups().add(group);
+                repository.write(config);
+                return group;
             }
         }
-        throw new RuntimeException("Group not found: " + groupId);
+        throw new RuntimeException("User not found with id: " + userId);
     }
 
-    public void deleteGroup(int userId, int groupId) {
-        UserAreasWrapper wrapper = repository.read();
-        wrapper.getUsers().stream()
-                .filter(u -> u.getUserId() == userId)
-                .findFirst()
-                .ifPresent(user -> {
-                    user.getGroups().removeIf(g -> g.getGroupId() == groupId);
-                    repository.save(wrapper);
-                });
+    public UserGroup updateGroup(Long userId, Long groupId, UserGroup updatedGroup) {
+        UserAreaConfig config = repository.read();
+        List<User> users = config.getUsers();
+        if (users != null) {
+            for (User user : users) {
+                if (user.getUserId().equals(userId)) {
+                    List<UserGroup> groups = user.getGroups();
+                    if (groups != null) {
+                        for (int i = 0; i < groups.size(); i++) {
+                            if (groups.get(i).getGroupId().equals(groupId)) {
+                                updatedGroup.setGroupId(groupId);
+                                groups.set(i, updatedGroup);
+                                repository.write(config);
+                                return updatedGroup;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        throw new RuntimeException("Group not found with id: " + groupId + " for user: " + userId);
     }
 
-    public List<UserGroup> getAllGroups() {
-        List<UserGroup> allGroups = new ArrayList<>();
-        repository.read().getUsers().forEach(u -> allGroups.addAll(u.getGroups()));
-        return allGroups;
+    public void deleteGroup(Long userId, Long groupId) {
+        UserAreaConfig config = repository.read();
+        List<User> users = config.getUsers();
+        if (users != null) {
+            for (User user : users) {
+                if (user.getUserId().equals(userId)) {
+                    if (user.getGroups() != null) {
+                        user.getGroups().removeIf(g -> g.getGroupId().equals(groupId));
+                        repository.write(config);
+                        return;
+                    }
+                }
+            }
+        }
     }
 }

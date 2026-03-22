@@ -1,16 +1,17 @@
-[
-  {
-    "groupId": 1,
-    "x": 0,
-    "y": 0,
-    "width": 256,
-    "height": 256
-  },
-  {
-    "groupId": 2,
-    "x": 256,
-    "y": 0,
-    "width": 256,
-    "height": 256
+[ {
+  "groupId" : 1,
+  "atlasCoords" : {
+    "h" : 41,
+    "y" : 163,
+    "x" : 573,
+    "w" : 164
   }
-]
+}, {
+  "groupId" : 2,
+  "atlasCoords" : {
+    "h" : 82,
+    "y" : 614,
+    "x" : 901,
+    "w" : 82
+  }
+} ]

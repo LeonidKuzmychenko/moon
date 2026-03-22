@@ -5,6 +5,13 @@ spring:
     resources:
       static-locations: classpath:/front/,classpath:/atlas/,classpath:/tiles/,classpath:/sphere/,classpath:/user/
 
+app:
+  user-areas-path: src/main/resources/user/userAreas.json
+  sphere-path: src/main/resources/sphere.json
+  atlas-png-path: src/main/resources/atlas/atlas.png
+  atlas-json-path: src/main/resources/atlas/atlas.json
+  tiles-dir-path: src/main/resources/tiles
+
 server:
   port: 8080
   servlet:

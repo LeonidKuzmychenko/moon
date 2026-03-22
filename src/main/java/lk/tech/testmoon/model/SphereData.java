@@ -4,7 +4,6 @@ import lombok.Data;
 import java.util.List;
 
 @Data
-public class User {
-    private Long userId;
-    private List<UserGroup> groups;
+public class SphereData {
+    private List<SphereArea> areas;
 }

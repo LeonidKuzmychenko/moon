@@ -1,45 +1,37 @@
 package lk.tech.testmoon.controller;
 
-import lk.tech.testmoon.model.AtlasItem;
 import lk.tech.testmoon.service.AtlasService;
-import org.springframework.core.io.FileSystemResource;
-import org.springframework.core.io.Resource;
 import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.io.File;
-import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/atlas")
 public class AtlasController {
 
-    private final AtlasService service;
+    private final AtlasService atlasService;
 
-    public AtlasController(AtlasService service) {
-        this.service = service;
+    public AtlasController(AtlasService atlasService) {
+        this.atlasService = atlasService;
     }
 
     @PostMapping
-    public void generateAtlas() throws IOException {
-        service.generateAtlas();
+    public void generateAtlas() {
+        atlasService.generateAtlas();
     }
 
     @GetMapping(produces = MediaType.IMAGE_PNG_VALUE)
-    public ResponseEntity<Resource> getAtlasPng() {
-        File file = service.getAtlasPng();
-        if (!file.exists()) {
-            return ResponseEntity.notFound().build();
-        }
-        return ResponseEntity.ok()
-                .contentType(MediaType.IMAGE_PNG)
-                .body(new FileSystemResource(file));
+    public byte[] getAtlas() {
+        return atlasService.getAtlasPng();
     }
 
     @GetMapping("/info")
-    public List<AtlasItem> getAtlasInfo() throws IOException {
-        return service.getAtlasInfo();
+    public List<Map<String, Object>> getAtlasInfo() {
+        return atlasService.getAtlasJson();
     }
 }

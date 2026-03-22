@@ -7,13 +7,13 @@
           "groupId": 1,
           "url": "https://google.com",
           "tile": "tile1.jpg",
-          "areaIds": [100, 101, 102, 103, 104, 105]
+          "areaIds": [60, 61]
         },
         {
           "groupId": 2,
           "url": "https://github.com",
           "tile": "tile2.jpg",
-          "areaIds": [500, 501, 502, 503, 504, 505]
+          "areaIds": [339,364]
         }
       ]
     }

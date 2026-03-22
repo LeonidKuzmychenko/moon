@@ -1,28 +1,30 @@
 package lk.tech.testmoon.controller;
 
 import lk.tech.testmoon.service.SphereService;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
 
-import java.io.IOException;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/sphere")
 public class SphereController {
 
-    private final SphereService service;
+    private final SphereService sphereService;
 
-    public SphereController(SphereService service) {
-        this.service = service;
+    public SphereController(SphereService sphereService) {
+        this.sphereService = sphereService;
     }
 
     @PostMapping
-    public void generateSphere() throws IOException {
-        service.generateSphereLayout();
+    public void generateSphere() {
+        sphereService.generateSphere();
     }
 
     @GetMapping
-    public Map<String, Object> getSphereData() throws IOException {
-        return service.getCombinedData();
+    public Map<String, Object> getSphere() {
+        return sphereService.getSphereWithUserData();
     }
 }
