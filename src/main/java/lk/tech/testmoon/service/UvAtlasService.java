@@ -35,8 +35,8 @@ public class UvAtlasService {
     private static final String GLB_RESOURCE = "classpath:Moon.glb";
     private static final String TILE_RESOURCE = "classpath:tile.jpg";
     private static final String OUTPUT_PATH = "src/main/resources/static/generated/atlas.png";
-    private static final int ATLAS_WIDTH = 2200;
-    private static final int ATLAS_HEIGHT = 1500;
+    private static final int ATLAS_WIDTH = 13200;
+    private static final int ATLAS_HEIGHT = 9000;
 
     public MoonModelData getMoonModelData() throws IOException {
         Resource resource = resourceLoader.getResource(GLB_RESOURCE);
@@ -50,6 +50,8 @@ public class UvAtlasService {
 
         int vertexOffset = 0;
         int currentUvId = 1;
+        int northUvId = currentUvId++;
+        int southUvId = currentUvId++;
 
         for (MeshModel meshModel : gltfModel.getMeshModels()) {
             String name = meshModel.getName();
@@ -77,15 +79,13 @@ public class UvAtlasService {
                 if (name.equalsIgnoreCase("North")) {
                     // All triangles in North have the same uvId
                     for (int i = 0; i < numFaces; i++) {
-                        allUvIds.add(currentUvId);
+                        allUvIds.add(northUvId);
                     }
-                    currentUvId++;
                 } else if (name.equalsIgnoreCase("South")) {
                     // All triangles in South have the same uvId
                     for (int i = 0; i < numFaces; i++) {
-                        allUvIds.add(currentUvId);
+                        allUvIds.add(southUvId);
                     }
-                    currentUvId++;
                 } else if (name.equalsIgnoreCase("Sphere")) {
                     // Every 2 triangles (quad) have the same uvId
                     for (int i = 0; i < numFaces; i++) {
@@ -163,15 +163,15 @@ public class UvAtlasService {
             }
             
             // Draw face border and its ID in the middle for debugging/clarity
-            g2d.setColor(new Color(0, 0, 0, 50));
-            g2d.drawPolygon(poly);
+//            g2d.setColor(new Color(0, 0, 0, 50));
+//            g2d.drawPolygon(poly);
             
             // Label each triangle with its uvId
-            g2d.setColor(Color.BLACK);
-            g2d.setFont(new Font("Arial", Font.PLAIN, 10));
-            int centerX = (int)((u1 + u2 + u3) / 3.0 * ATLAS_WIDTH);
-            int centerY = (int)((1 - (v1 + v2 + v3) / 3.0) * ATLAS_HEIGHT);
-            g2d.drawString(String.valueOf(uvIds[faceIndex]), centerX, centerY);
+//            g2d.setColor(Color.BLACK);
+//            g2d.setFont(new Font("Arial", Font.PLAIN, 10));
+//            int centerX = (int)((u1 + u2 + u3) / 3.0 * ATLAS_WIDTH);
+//            int centerY = (int)((1 - (v1 + v2 + v3) / 3.0) * ATLAS_HEIGHT);
+//            g2d.drawString(String.valueOf(uvIds[faceIndex]), centerX, centerY);
         }
 
         g2d.dispose();
