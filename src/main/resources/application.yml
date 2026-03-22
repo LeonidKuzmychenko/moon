@@ -1,22 +1,12 @@
 spring:
   application:
     name: test-moon
-#  datasource:
-#    url: jdbc:postgresql://localhost:5432/postgres
-#    username: postgres
-#    password: postgres
-#  jpa:
-#    hibernate:
-#      ddl-auto: create
-#    properties:
-#      hibernate:
-#        default_schema: moon
-#        format_sql: true
-#    show-sql: true
-
+  web:
+    resources:
+      static-locations: classpath:/front/,classpath:/atlas/,classpath:/tiles/,classpath:/sphere/,classpath:/user/
 
 server:
-  port: 8082
+  port: 8080
   servlet:
     multipart:
       max-file-size: 5MB
