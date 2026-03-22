@@ -33,10 +33,12 @@ public class UvAtlasService {
     private ResourceLoader resourceLoader;
 
     private static final String GLB_RESOURCE = "classpath:Moon.glb";
-    private static final String TILE_RESOURCE = "classpath:tile.jpg";
+    private static final String TILE_1_RESOURCE = "classpath:tile1.jpg";
+    private static final String TILE_2_RESOURCE = "classpath:tile2.jpg";
+    private static final String TILE_WHITE_RESOURCE = "classpath:white.jpg";
     private static final String OUTPUT_PATH = "src/main/resources/static/generated/atlas.png";
-    private static final int ATLAS_WIDTH = 13200;
-    private static final int ATLAS_HEIGHT = 9000;
+    private static final int ATLAS_WIDTH = 8800;
+    private static final int ATLAS_HEIGHT = 6000;
 
     public MoonModelData getMoonModelData() throws IOException {
         Resource resource = resourceLoader.getResource(GLB_RESOURCE);
@@ -86,7 +88,7 @@ public class UvAtlasService {
                     for (int i = 0; i < numFaces; i++) {
                         allUvIds.add(southUvId);
                     }
-                } else if (name.equalsIgnoreCase("Sphere")) {
+                } else if (name.equalsIgnoreCase("Sphere.003")) {
                     // Every 2 triangles (quad) have the same uvId
                     for (int i = 0; i < numFaces; i++) {
                         allUvIds.add(currentUvId + (i / 2));
@@ -108,6 +110,8 @@ public class UvAtlasService {
         data.setUv(floatListToArray(allUvs));
         data.setIndices(allIndices.stream().mapToInt(Integer::intValue).toArray());
         data.setUvIds(allUvIds.stream().mapToInt(Integer::intValue).toArray());
+        data.setNorthUvId(northUvId);
+        data.setSouthUvId(southUvId);
 
         return data;
     }
@@ -128,18 +132,18 @@ public class UvAtlasService {
         g2d.setColor(Color.WHITE);
         g2d.fillRect(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
 
-        BufferedImage tile;
-        try (InputStream is = resourceLoader.getResource(TILE_RESOURCE).getInputStream()) {
-            tile = ImageIO.read(is);
-        }
-
         int[] indices = data.getIndices();
         float[] uvs = data.getUv();
 
         int[] uvIds = data.getUvIds();
 
+        BufferedImage tile1 = getTile(TILE_1_RESOURCE);
+        BufferedImage tile2 = getTile(TILE_2_RESOURCE);
+        BufferedImage tileWhite = getTile(TILE_WHITE_RESOURCE);
+
         for (int i = 0; i < indices.length; i += 3) {
             int faceIndex = i / 3;
+            int uvId = uvIds[faceIndex];
             int i1 = indices[i];
             int i2 = indices[i + 1];
             int i3 = indices[i + 2];
@@ -150,28 +154,29 @@ public class UvAtlasService {
 
             // Use (u, 1-v) for top-left (0,0) image coordinates
             Polygon poly = new Polygon();
-            poly.addPoint((int)(u1 * ATLAS_WIDTH), (int)((1 - v1) * ATLAS_HEIGHT));
-            poly.addPoint((int)(u2 * ATLAS_WIDTH), (int)((1 - v2) * ATLAS_HEIGHT));
-            poly.addPoint((int)(u3 * ATLAS_WIDTH), (int)((1 - v3) * ATLAS_HEIGHT));
+            poly.addPoint((int) (u1 * ATLAS_WIDTH), (int) ((1 - v1) * ATLAS_HEIGHT));
+            poly.addPoint((int) (u2 * ATLAS_WIDTH), (int) ((1 - v2) * ATLAS_HEIGHT));
+            poly.addPoint((int) (u3 * ATLAS_WIDTH), (int) ((1 - v3) * ATLAS_HEIGHT));
 
             Rectangle bounds = poly.getBounds();
             if (bounds.width > 0 && bounds.height > 0) {
+                if (uvId == data.getNorthUvId() || uvId == data.getSouthUvId()) {
+                    g2d.setColor(Color.WHITE);
+                    g2d.fill(poly);
+                }
+
+                BufferedImage tile;
+                if (uvId == data.getNorthUvId() || uvId == data.getSouthUvId()) {
+                    tile = tileWhite;
+                } else {
+                    tile = Math.random() > 0.5 ? tile1 : tile2;
+                }
+
                 Shape oldClip = g2d.getClip();
                 g2d.setClip(poly);
                 g2d.drawImage(tile, bounds.x, bounds.y, bounds.width, bounds.height, null);
                 g2d.setClip(oldClip);
             }
-            
-            // Draw face border and its ID in the middle for debugging/clarity
-//            g2d.setColor(new Color(0, 0, 0, 50));
-//            g2d.drawPolygon(poly);
-            
-            // Label each triangle with its uvId
-//            g2d.setColor(Color.BLACK);
-//            g2d.setFont(new Font("Arial", Font.PLAIN, 10));
-//            int centerX = (int)((u1 + u2 + u3) / 3.0 * ATLAS_WIDTH);
-//            int centerY = (int)((1 - (v1 + v2 + v3) / 3.0) * ATLAS_HEIGHT);
-//            g2d.drawString(String.valueOf(uvIds[faceIndex]), centerX, centerY);
         }
 
         g2d.dispose();
@@ -179,6 +184,12 @@ public class UvAtlasService {
         File output = new File(OUTPUT_PATH);
         output.getParentFile().mkdirs();
         ImageIO.write(atlas, "png", output);
+    }
+
+    private BufferedImage getTile(String tileImage) throws IOException {
+        try (InputStream is = resourceLoader.getResource(tileImage).getInputStream()) {
+            return ImageIO.read(is);
+        }
     }
 
     private float[] getFloatArray(AccessorModel accessor) {
@@ -197,7 +208,7 @@ public class UvAtlasService {
         int numElements = accessorData.getNumElements();
         int numComponents = accessorData.getNumComponentsPerElement();
         int[] result = new int[numElements * numComponents];
-        
+
         for (int i = 0; i < numElements; i++) {
             for (int j = 0; j < numComponents; j++) {
                 if (accessorData instanceof AccessorByteData) {

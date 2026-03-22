@@ -9,4 +9,6 @@ public class MoonModelData {
     private int[] indices;
     private float[] uv;
     private int[] uvIds;
+    private int northUvId;
+    private int southUvId;
 }
