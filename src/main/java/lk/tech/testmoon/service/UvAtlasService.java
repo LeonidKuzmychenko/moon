@@ -169,7 +169,9 @@ public class UvAtlasService {
                 if (uvId == data.getNorthUvId() || uvId == data.getSouthUvId()) {
                     tile = tileWhite;
                 } else {
-                    tile = Math.random() > 0.5 ? tile1 : tile2;
+                    // Используем детерминированный выбор картинки на основе uvId,
+                    // чтобы для одного uvId всегда использовалась одна и та же картинка.
+                    tile = (uvId % 2 == 0) ? tile1 : tile2;
                 }
 
                 Shape oldClip = g2d.getClip();
