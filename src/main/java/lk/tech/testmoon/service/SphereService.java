@@ -18,9 +18,8 @@ import java.util.stream.Collectors;
 @Service
 public class SphereService {
 
-    private static final int TOTAL_ROWS = 25;
-    private static final int TOTAL_COLS = 25;
-    private static final double CAP_PERCENT = 0.05;
+    private static final int TOTAL_ROWS = 6;
+    private static final int TOTAL_COLS = 6;
     private static final double RADIUS = 1.0;
 
     private final ObjectMapper objectMapper;
@@ -37,44 +36,21 @@ public class SphereService {
     public void generateSphere() {
         List<SphereArea> areas = new ArrayList<>();
         int areaIdCounter = 1;
-        int capRows = (int) Math.ceil(TOTAL_ROWS * CAP_PERCENT);
 
         for (int r = 0; r < TOTAL_ROWS; r++) {
-            boolean isCap = (r < capRows) || (r >= TOTAL_ROWS - capRows);
-
-            if (isCap) {
-                // Single polygon for the whole row
+            for (int c = 0; c < TOTAL_COLS; c++) {
                 List<SphereArea.Vertex> vertices = new ArrayList<>();
                 double phi1 = (double) r / TOTAL_ROWS * Math.PI;
                 double phi2 = (double) (r + 1) / TOTAL_ROWS * Math.PI;
+                double theta1 = (double) c / TOTAL_COLS * 2 * Math.PI;
+                double theta2 = (double) (c + 1) / TOTAL_COLS * 2 * Math.PI;
 
-                // Points at phi1
-                for (int c = 0; c <= TOTAL_COLS; c++) {
-                    double theta = (double) c / TOTAL_COLS * 2 * Math.PI;
-                    vertices.add(calculateVertex(phi1, theta));
-                }
-                // Points at phi2 (reverse order to keep polygon consistent)
-                for (int c = TOTAL_COLS; c >= 0; c--) {
-                    double theta = (double) c / TOTAL_COLS * 2 * Math.PI;
-                    vertices.add(calculateVertex(phi2, theta));
-                }
+                vertices.add(calculateVertex(phi1, theta1));
+                vertices.add(calculateVertex(phi1, theta2));
+                vertices.add(calculateVertex(phi2, theta2));
+                vertices.add(calculateVertex(phi2, theta1));
+
                 areas.add(new SphereArea(areaIdCounter++, vertices));
-            } else {
-                // Regular grid of rectangles
-                for (int c = 0; c < TOTAL_COLS; c++) {
-                    List<SphereArea.Vertex> vertices = new ArrayList<>();
-                    double phi1 = (double) r / TOTAL_ROWS * Math.PI;
-                    double phi2 = (double) (r + 1) / TOTAL_ROWS * Math.PI;
-                    double theta1 = (double) c / TOTAL_COLS * 2 * Math.PI;
-                    double theta2 = (double) (c + 1) / TOTAL_COLS * 2 * Math.PI;
-
-                    vertices.add(calculateVertex(phi1, theta1));
-                    vertices.add(calculateVertex(phi1, theta2));
-                    vertices.add(calculateVertex(phi2, theta2));
-                    vertices.add(calculateVertex(phi2, theta1));
-
-                    areas.add(new SphereArea(areaIdCounter++, vertices));
-                }
             }
         }
 
