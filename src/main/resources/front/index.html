@@ -63,9 +63,9 @@
             throw new Error(`Invalid quads length: ${quads.length}`);
         }
         const vCount = positions.length / 3;
-        // if (uvs.length > 0 && uvs.length !== vCount * 2) {
-        //     throw new Error(`Invalid uvs length: expected ${vCount * 2}, got ${uvs.length}`);
-        // }
+        if (uvs.length > 0 && uvs.length !== vCount * 2) {
+            throw new Error(`Invalid uvs length: expected ${vCount * 2}, got ${uvs.length}`);
+        }
         if (normals.length > 0 && normals.length !== positions.length) {
             throw new Error(
                 `Invalid normals length: positions=${positions.length}, normals=${normals.length}`

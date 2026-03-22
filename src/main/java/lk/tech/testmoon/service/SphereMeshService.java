@@ -115,7 +115,7 @@ public class SphereMeshService {
         float[] mergedNormals = hasAnyNormals
                 ? mergeNormalsAligned(normalParts, positionParts)
                 : new float[0];
-        float[] mergedUvs = mergeNormalsAligned(uvParts, positionParts);
+        float[] mergedUvs = mergeUvsAligned(uvParts, positionParts);
         int[] mergedTriangleIndices = mergeIndicesWithVertexOffset(indexParts, positionParts);
         MeshRegion[] triangleRegion = buildTriangleRegions(indexParts, regionPerPart);
 
@@ -659,6 +659,21 @@ public class SphereMeshService {
                 System.arraycopy(normals, 0, out, outOffset, normals.length);
             }
             outOffset += positions.length;
+        }
+        return out;
+    }
+
+    private float[] mergeUvsAligned(List<float[]> uvParts, List<float[]> positionParts) {
+        int vertexCountTotal = positionParts.stream().mapToInt(a -> a.length / 3).sum();
+        float[] out = new float[vertexCountTotal * 2];
+        int outOffset = 0;
+        for (int i = 0; i < uvParts.size(); i++) {
+            float[] uvs = uvParts.get(i);
+            int vertexCount = positionParts.get(i).length / 3;
+            if (uvs.length == vertexCount * 2) {
+                System.arraycopy(uvs, 0, out, outOffset, uvs.length);
+            }
+            outOffset += vertexCount * 2;
         }
         return out;
     }
