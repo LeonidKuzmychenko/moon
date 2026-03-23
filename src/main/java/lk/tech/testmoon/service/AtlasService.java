@@ -26,12 +26,12 @@ public class AtlasService {
     private final String tilesDirPath;
 
     //16k
-    private static final int ATLAS_WIDTH = 15360;
-    private static final int ATLAS_HEIGHT = 8640;
+//    private static final int ATLAS_WIDTH = 15360;
+//    private static final int ATLAS_HEIGHT = 8640;
 
     //8k 7680x4320
-//    private static final int ATLAS_WIDTH = 7680;
-//    private static final int ATLAS_HEIGHT = 4320;
+    private static final int ATLAS_WIDTH = 7680;
+    private static final int ATLAS_HEIGHT = 4320;
 
     //4k 3840x2160
 //    private static final int ATLAS_WIDTH = 3840;

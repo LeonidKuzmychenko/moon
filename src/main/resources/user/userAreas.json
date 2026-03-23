@@ -2872,14 +2872,6 @@
           "areaIds": [
             340
           ]
-        },
-        {
-          "groupId": 11,
-          "url": "https://google.com",
-          "tile": "wallhaven-e7xx6r.png",
-          "areaIds": [
-            341
-          ]
         }
       ]
     },
@@ -2891,15 +2883,7 @@
           "url": "https://google.com",
           "tile": "wallhaven-gjv2ke.png",
           "areaIds": [
-            342
-          ]
-        },
-        {
-          "groupId": 2,
-          "url": "https://google.com",
-          "tile": "wallhaven-83d3wo.jpg",
-          "areaIds": [
-            343
+            341, 342, 343
           ]
         },
         {
