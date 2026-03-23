@@ -35,17 +35,25 @@
         {
             "imports": {
                 "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+                "three-mesh-bvh": "https://unpkg.com/three-mesh-bvh@0.7.3/build/index.module.js"
             }
         }
     </script>
     <script type="module">
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+        import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+
+        // Extension for BVH
+        THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
+        THREE.BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
+        THREE.Mesh.prototype.raycast = acceleratedRaycast;
 
         let scene, camera, renderer, controls, raycaster, mouse;
-        let sphereGroup = new THREE.Group();
-        let areas = [];
+        let sphereMesh, gridLines;
+        let areaDataMap = new Map();
         const tooltip = document.getElementById('tooltip');
 
         init();
@@ -56,9 +64,10 @@
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
             camera.position.z = 3;
 
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer = new THREE.WebGLRenderer({ antialias: true, precision: 'highp' });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.outputColorSpace = THREE.SRGBColorSpace; // Ensure correct color space
             document.body.appendChild(renderer.domElement);
 
             controls = new OrbitControls(camera, renderer.domElement);
@@ -67,21 +76,24 @@
             raycaster = new THREE.Raycaster();
             mouse = new THREE.Vector2();
 
-            // Lighting
-            const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
-            scene.add(ambientLight);
-
-            scene.add(sphereGroup);
+            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
             // Fetch data
             try {
-                const sphereRes = await fetch('http://localhost:8080/sphere');
-                const sphereData = await sphereRes.json();
+                const [sphereRes, atlasRes] = await Promise.all([
+                    fetch('http://localhost:8080/sphere'),
+                    fetch('http://localhost:8080/atlas')
+                ]);
                 
-                const atlasRes = await fetch('http://localhost:8080/atlas');
+                const sphereData = await sphereRes.json();
                 const atlasBlob = await atlasRes.blob();
                 const atlasUrl = URL.createObjectURL(atlasBlob);
-                const atlasTexture = new THREE.TextureLoader().load(atlasUrl);
+                const atlasTexture = new THREE.TextureLoader().load(atlasUrl, (tex) => {
+                    tex.magFilter = THREE.NearestFilter;
+                    tex.minFilter = THREE.LinearFilter;
+                    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+                    tex.generateMipmaps = false; // Disable mipmaps for sharper edges
+                });
                 atlasTexture.colorSpace = THREE.SRGBColorSpace;
 
                 renderSphere(sphereData.areas, atlasTexture);
@@ -101,7 +113,7 @@
                 map: atlasTexture, 
                 side: THREE.DoubleSide,
                 transparent: true,
-                alphaTest: 0.1
+                alphaTest: 0.5
             });
             
             const lineMaterial = new THREE.LineBasicMaterial({ 
@@ -110,50 +122,78 @@
                 opacity: 0.3
             });
 
-            sphereAreas.forEach(area => {
-                const geometry = new THREE.BufferGeometry();
+            const meshGeometries = [];
+            const lineGeometries = [];
+
+            sphereAreas.forEach((area, index) => {
                 const vertices = [];
                 const uvs = [];
                 const indices = [];
 
-                // Simple triangulation for polygon
-                // For a convex polygon with N vertices: (0, 1, 2), (0, 2, 3), ..., (0, N-2, N-1)
+                // Find min/max theta to handle the 0/2PI seam
+                let minTheta = Infinity;
+                let maxTheta = -Infinity;
+                area.vertices.forEach(v => {
+                    minTheta = Math.min(minTheta, v.theta);
+                    maxTheta = Math.max(maxTheta, v.theta);
+                });
+
                 area.vertices.forEach((v, i) => {
                     vertices.push(v.x, v.y, v.z);
                     
-                    // Use phi and theta from vertex for stable UV mapping
-                    let phi = v.phi;
-                    let theta = v.theta;
-                    
-                    uvs.push(theta / (2 * Math.PI), 1 - (phi / Math.PI));
+                    let u = v.theta / (2 * Math.PI);
+                    // If polygon crosses the seam (longitude 0/360)
+                    if (maxTheta - minTheta > Math.PI) {
+                        if (v.theta < Math.PI) u += 1.0;
+                    }
+                    uvs.push(u, 1 - (v.phi / Math.PI));
 
                     if (i >= 2) {
                         indices.push(0, i - 1, i);
                     }
                 });
 
+                const geometry = new THREE.BufferGeometry();
                 geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
                 geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
                 geometry.setIndex(indices);
-                geometry.computeVertexNormals();
 
-                const mesh = new THREE.Mesh(geometry, material);
-                mesh.userData = {
+                // Add area ID for raycasting identification
+                const areaIds = new Float32Array(vertices.length / 3).fill(index);
+                geometry.setAttribute('areaIndex', new THREE.Float32BufferAttribute(areaIds, 1));
+
+                meshGeometries.push(geometry);
+
+                // Grid geometry (LineLoop equivalent in a single BufferGeometry)
+                // We use LineSegments for the merged grid, so we need to duplicate points for each segment
+                const lineVertices = [];
+                for(let i = 0; i < area.vertices.length; i++) {
+                    const v1 = area.vertices[i];
+                    const v2 = area.vertices[(i + 1) % area.vertices.length];
+                    lineVertices.push(v1.x, v1.y, v1.z, v2.x, v2.y, v2.z);
+                }
+                const lGeom = new THREE.BufferGeometry();
+                lGeom.setAttribute('position', new THREE.Float32BufferAttribute(lineVertices, 3));
+                lineGeometries.push(lGeom);
+
+                // Store metadata
+                areaDataMap.set(index, {
                     areaId: area.areaId,
                     groupId: area.groupId,
                     url: area.url,
                     userId: area.userId
-                };
-                
-                // Add a perimeter helper (no diagonals)
-                const lineGeometry = new THREE.BufferGeometry();
-                lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
-                const lineLoop = new THREE.LineLoop(lineGeometry, lineMaterial);
-                mesh.add(lineLoop);
-
-                sphereGroup.add(mesh);
-                areas.push(mesh);
+                });
             });
+
+            // Merge all geometries into one for 1 draw call
+            const mergedMeshGeom = BufferGeometryUtils.mergeGeometries(meshGeometries, true);
+            mergedMeshGeom.computeBoundsTree(); // BVH
+            sphereMesh = new THREE.Mesh(mergedMeshGeom, material);
+            scene.add(sphereMesh);
+
+            const mergedLineGeom = BufferGeometryUtils.mergeGeometries(lineGeometries);
+            gridLines = new THREE.LineSegments(mergedLineGeom, lineMaterial);
+            scene.add(gridLines);
         }
 
         function onMouseMove(event) {
@@ -161,10 +201,17 @@
             mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(areas);
+            if (!sphereMesh) return;
+
+            const intersects = raycaster.intersectObject(sphereMesh);
 
             if (intersects.length > 0) {
-                const data = intersects[0].object.userData;
+                const intersection = intersects[0];
+                const geometry = sphereMesh.geometry;
+                const areaIndexAttr = geometry.getAttribute('areaIndex');
+                const areaIndex = areaIndexAttr.getX(intersection.face.a);
+                const data = areaDataMap.get(areaIndex);
+
                 tooltip.style.display = 'block';
                 tooltip.style.left = (event.clientX + 10) + 'px';
                 tooltip.style.top = (event.clientY + 10) + 'px';
@@ -183,10 +230,17 @@
 
         function onClick(event) {
             raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObjects(areas);
+            if (!sphereMesh) return;
+
+            const intersects = raycaster.intersectObject(sphereMesh);
 
             if (intersects.length > 0) {
-                const data = intersects[0].object.userData;
+                const intersection = intersects[0];
+                const geometry = sphereMesh.geometry;
+                const areaIndexAttr = geometry.getAttribute('areaIndex');
+                const areaIndex = areaIndexAttr.getX(intersection.face.a);
+                const data = areaDataMap.get(areaIndex);
+
                 if (data.url) {
                     window.open(data.url, '_blank');
                 }

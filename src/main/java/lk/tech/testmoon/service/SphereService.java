@@ -18,8 +18,8 @@ import java.util.stream.Collectors;
 @Service
 public class SphereService {
 
-    private static final int TOTAL_ROWS = 50;
-    private static final int TOTAL_COLS = 50;
+    private static final int TOTAL_ROWS = 100;
+    private static final int TOTAL_COLS = 100;
     private static final double RADIUS = 1.0;
 
     private final ObjectMapper objectMapper;

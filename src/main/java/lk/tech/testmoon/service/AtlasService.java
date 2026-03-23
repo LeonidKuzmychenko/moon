@@ -25,8 +25,8 @@ public class AtlasService {
     private final String atlasJsonPath;
     private final String tilesDirPath;
 
-    private static final int ATLAS_WIDTH = 4000;
-    private static final int ATLAS_HEIGHT = 2000;
+    private static final int ATLAS_WIDTH = 15360;
+    private static final int ATLAS_HEIGHT = 8640;
 
     public AtlasService(UserAreaRepository userAreaRepository,
                         @Value("${app.sphere-path:src/main/resources/sphere.json}") String sphereFilePath,
@@ -54,6 +54,12 @@ public class AtlasService {
 
         BufferedImage atlas = new BufferedImage(ATLAS_WIDTH, ATLAS_HEIGHT, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2d = atlas.createGraphics();
+        
+        // Quality rendering hints for sharper edges
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
+        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2d.setRenderingHint(RenderingHints.KEY_COLOR_RENDERING, RenderingHints.VALUE_COLOR_RENDER_QUALITY);
         
         // Fill background with white tile if available, otherwise solid white
         try {
