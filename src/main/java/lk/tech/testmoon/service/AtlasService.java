@@ -6,16 +6,14 @@ import lk.tech.testmoon.repository.UserAreaRepository;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Service
 public class AtlasService {
@@ -57,114 +55,44 @@ public class AtlasService {
         BufferedImage atlas = new BufferedImage(ATLAS_WIDTH, ATLAS_HEIGHT, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2d = atlas.createGraphics();
         
-        // Fill background with transparent
-        g2d.setComposite(AlphaComposite.Clear);
-        g2d.fillRect(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
-        g2d.setComposite(AlphaComposite.SrcOver);
+        // Fill background with white tile if available, otherwise solid white
+        try {
+            File whiteTileFile = new File(tilesDirPath, "white.jpg");
+            if (whiteTileFile.exists()) {
+                BufferedImage whiteTile = ImageIO.read(whiteTileFile);
+                g2d.drawImage(whiteTile, 0, 0, ATLAS_WIDTH, ATLAS_HEIGHT, null);
+            } else {
+                g2d.setColor(Color.WHITE);
+                g2d.fillRect(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
+            }
+        } catch (IOException e) {
+            g2d.setColor(Color.WHITE);
+            g2d.fillRect(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
+        }
 
         List<Map<String, Object>> atlasInfo = new ArrayList<>();
 
+        // Draw user groups
         for (User user : userConfig.getUsers()) {
             if (user.getGroups() == null) continue;
             for (UserGroup group : user.getGroups()) {
                 if (group.getAreaIds() == null || group.getAreaIds().isEmpty()) continue;
 
-                // Find bounding box of areaIds in (phi, theta) space
-                double minPhi = Double.MAX_VALUE;
-                double maxPhi = Double.MIN_VALUE;
-                double minTheta = Double.MAX_VALUE;
-                double maxTheta = Double.MIN_VALUE;
-
-                List<Double> thetas = new ArrayList<>();
+                List<SphereArea> groupAreas = new ArrayList<>();
                 for (Integer areaId : group.getAreaIds()) {
-                    SphereArea area = sphereData.getAreas().stream()
+                    sphereData.getAreas().stream()
                             .filter(a -> a.getAreaId() == areaId)
                             .findFirst()
-                            .orElse(null);
-                    if (area == null) continue;
-
-                    for (SphereArea.Vertex v : area.getVertices()) {
-                        double phi = v.getPhi();
-                        double theta = v.getTheta();
-                        
-                        minPhi = Math.min(minPhi, phi);
-                        maxPhi = Math.max(maxPhi, phi);
-                        thetas.add(theta);
-                    }
+                            .ifPresent(groupAreas::add);
                 }
 
-                if (thetas.isEmpty()) continue;
+                if (groupAreas.isEmpty()) continue;
 
-                // Sort thetas to find the largest gap
-                thetas.sort(Double::compare);
-                
-                double largestGap = 0;
-                int largestGapIndex = -1;
-
-                for (int i = 0; i < thetas.size(); i++) {
-                    double t1 = thetas.get(i);
-                    double t2 = thetas.get((i + 1) % thetas.size());
-                    double gap = (t2 - t1 + 2 * Math.PI) % (2 * Math.PI);
-                    if (gap > largestGap) {
-                        largestGap = gap;
-                        largestGapIndex = i;
-                    }
-                }
-
-                // If largest gap is significant, it means the group wraps around
-                // But only if it's NOT the wrap-around gap (between last and first)
-                if (largestGap > Math.PI) {
-                    if (largestGapIndex == thetas.size() - 1) {
-                        // Largest gap is the one crossing 0. Group does NOT cross 0.
-                        minTheta = thetas.get(0);
-                        maxTheta = thetas.get(thetas.size() - 1);
-                    } else {
-                        // Largest gap is in the middle. Group DOES cross 0.
-                        minTheta = thetas.get(largestGapIndex + 1);
-                        maxTheta = thetas.get(largestGapIndex) + 2 * Math.PI;
-                    }
-                } else {
-                    // No large gap, assume it's a contiguous block or full row
-                    minTheta = thetas.get(0);
-                    maxTheta = thetas.get(thetas.size() - 1);
-                    // Special case: if it covers almost the whole row, make it exactly 0..2PI
-                    if (largestGap < 0.2 && (maxTheta - minTheta) > 1.8 * Math.PI) {
-                        minTheta = 0;
-                        maxTheta = 2 * Math.PI;
-                    }
-                }
-
-                // Map to atlas pixel coordinates
-                double x_double = (minTheta / (2 * Math.PI) * ATLAS_WIDTH);
-                double y_double = (minPhi / Math.PI * ATLAS_HEIGHT);
-                double w_double = (maxTheta / (2 * Math.PI) * ATLAS_WIDTH) - x_double;
-                double h_double = (maxPhi / Math.PI * ATLAS_HEIGHT) - y_double;
-
-                int x = (int) x_double;
-                int y = (int) y_double;
-                int w = (int) w_double;
-                int h = (int) h_double;
-
-                if (w <= 0) w = 1;
-                if (h <= 0) h = 1;
-
-                // Draw tile
                 try {
                     File tileFile = new File(tilesDirPath, group.getTile());
                     if (tileFile.exists()) {
                         BufferedImage tileImg = ImageIO.read(tileFile);
-                        
-                        // Draw with wrap-around support
-                        int drawX = x % ATLAS_WIDTH;
-                        g2d.drawImage(tileImg, drawX, y, w, h, null);
-                        if (drawX + w > ATLAS_WIDTH) {
-                            g2d.drawImage(tileImg, drawX - ATLAS_WIDTH, y, w, h, null);
-                        }
-                        
-                        Map<String, Object> info = new HashMap<>();
-                        info.put("groupId", group.getGroupId());
-                        info.put("atlasCoords", Map.of("x", drawX, "y", y, "w", w, "h", h));
-                        atlasInfo.add(info);
+                        drawAreasOnAtlas(g2d, groupAreas, tileImg, group.getGroupId(), atlasInfo);
                     }
                 } catch (IOException e) {
                     System.err.println("Could not read tile image: " + group.getTile());
@@ -179,6 +107,90 @@ public class AtlasService {
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(new File(atlasJsonPath), atlasInfo);
         } catch (IOException e) {
             throw new RuntimeException("Could not save atlas files", e);
+        }
+    }
+
+    private void drawAreasOnAtlas(Graphics2D g2d, List<SphereArea> areas, BufferedImage tileImg, Long groupId, List<Map<String, Object>> atlasInfo) {
+        double minPhi = Double.MAX_VALUE;
+        double maxPhi = Double.MIN_VALUE;
+        List<Double> thetas = new ArrayList<>();
+
+        for (SphereArea area : areas) {
+            for (SphereArea.Vertex v : area.getVertices()) {
+                double phi = v.getPhi();
+                double theta = v.getTheta();
+                
+                minPhi = Math.min(minPhi, phi);
+                maxPhi = Math.max(maxPhi, phi);
+                thetas.add(theta);
+            }
+        }
+
+        if (thetas.isEmpty()) return;
+
+        thetas.sort(Double::compare);
+        
+        double largestGap = 0;
+        int largestGapIndex = -1;
+        double minTheta;
+        double maxTheta;
+
+        for (int i = 0; i < thetas.size(); i++) {
+            double t1 = thetas.get(i);
+            double t2 = thetas.get((i + 1) % thetas.size());
+            double gap = (t2 - t1 + 2 * Math.PI) % (2 * Math.PI);
+            if (gap > largestGap) {
+                largestGap = gap;
+                largestGapIndex = i;
+            }
+        }
+
+        if (largestGap > Math.PI) {
+            if (largestGapIndex == thetas.size() - 1) {
+                minTheta = thetas.get(0);
+                maxTheta = thetas.get(thetas.size() - 1);
+            } else {
+                minTheta = thetas.get(largestGapIndex + 1);
+                maxTheta = thetas.get(largestGapIndex) + 2 * Math.PI;
+            }
+        } else {
+            minTheta = thetas.get(0);
+            maxTheta = thetas.get(thetas.size() - 1);
+            if (largestGap < 0.2 && (maxTheta - minTheta) > 1.8 * Math.PI) {
+                minTheta = 0;
+                maxTheta = 2 * Math.PI;
+            }
+        }
+
+        double x_double = (minTheta / (2 * Math.PI) * ATLAS_WIDTH);
+        double y_double = (minPhi / Math.PI * ATLAS_HEIGHT);
+        double x_end_double = (maxTheta / (2 * Math.PI) * ATLAS_WIDTH);
+        double y_end_double = (maxPhi / Math.PI * ATLAS_HEIGHT);
+
+        int x = (int) Math.round(x_double);
+        int y = (int) Math.round(y_double);
+        int x_end = (int) Math.round(x_end_double);
+        int y_end = (int) Math.round(y_end_double);
+
+        int w = x_end - x;
+        int h = y_end - y;
+
+        if (w <= 0) w = 1;
+        if (h <= 0) h = 1;
+
+        int drawX = x % ATLAS_WIDTH;
+        if (drawX < 0) drawX += ATLAS_WIDTH;
+
+        g2d.drawImage(tileImg, drawX, y, w, h, null);
+        if (drawX + w > ATLAS_WIDTH) {
+            g2d.drawImage(tileImg, drawX - ATLAS_WIDTH, y, w, h, null);
+        }
+        
+        if (groupId != null && atlasInfo != null) {
+            Map<String, Object> info = new HashMap<>();
+            info.put("groupId", groupId);
+            info.put("atlasCoords", Map.of("x", drawX, "y", y, "w", w, "h", h));
+            atlasInfo.add(info);
         }
     }
 
