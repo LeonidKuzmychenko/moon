@@ -1,97 +1,96 @@
-# Test Moon Project
+# KTX2 Sphere Project
 
-Цей проект реалізує бекенд на Spring Boot та фронтенд на Three.js для візуалізації 3D сфери з інтерактивними областями, які мапуються на атлас зображень.
+## Описание архитектуры
+Проект представляет собой систему для визуализации сферы, разделенной на логические области (`areaId`), с использованием современных графических технологий.
+Ключевой особенностью данной версии является использование формата **KTX2** для текстурного атласа в runtime, что обеспечивает высокую производительность и эффективное использование видеопамяти.
 
-## Технологічний стек
+### Почему KTX2?
+- **GPU-сжатие**: В отличие от PNG, KTX2 (через Basis Universal / ETC1S) остается сжатым в видеопамяти.
+- **Быстрая загрузка**: Текстуры передаются на GPU без промежуточной распаковки на CPU.
+- **Mipmaps**: Поддержка встроенных уровней детализации.
 
-- **Бекенд**: Java 21, Spring Boot 3+, Jackson (для роботи з JSON), AWT (для генерації атласу).
-- **Фронтенд**: HTML5, CSS3, JavaScript (ES6+), Three.js (через CDN).
+**atlas.png** используется только как промежуточный этап генерации для упаковки исходных тайлов.
 
----
-
-## Бекенд Структура
-
-### Моделі Даних
-
-- `UserAreaConfig`: Кореневий об'єкт для `userAreas.json`.
-- `User`: Об'єкт користувача з ID та списком груп.
-- `UserGroup`: Група з `groupId`, `url`, назвою тайлу (`tile`) та списком `areaIds`.
-- `SphereArea`: Область на сфері з унікальним `areaId` та списком 3D вершин.
-- `SphereData`: Кореневий об'єкт для `sphere.json`.
-
-### Контролери та Ендпоінти
-
-#### 1. UserController (`/users`)
-- `GET /users`: Отримати список усіх користувачів.
-- `GET /users/{userId}`: Отримати користувача за ID.
-- `POST /users`: Створити нового користувача.
-- `PUT /users/{userId}`: Оновити дані користувача.
-- `DELETE /users/{userId}`: Видалити користувача.
-
-#### 2. UserGroupController (`/users/{userId}/groups`)
-- `GET /users/{userId}/groups`: Отримати групи користувача.
-- `GET /users/{userId}/groups/{groupId}`: Отримати конкретну групу.
-- `POST /users/{userId}/groups`: Додати нову групу користувачу.
-- `PUT /users/{userId}/groups/{groupId}`: Оновити групу.
-- `DELETE /users/{userId}/groups/{groupId}`: Видалити групу.
-
-#### 3. SphereController (`/sphere`)
-- `POST /sphere`: Генерує розметку сфери (25x25). 
-  - Перші та останні 5% рядів стають цільними багатокутниками (полярні шапки).
-  - Результат зберігається у `resources/sphere.json`.
-- `GET /sphere`: Повертає об'єднані дані з `sphere.json` та `userAreas.json` для фронтенду.
-
-#### 4. AtlasController (`/atlas`)
-- `POST /atlas`: Формує `atlas.png` та `atlas.json`.
-  - Знаходить крайні координати для кожної групи на основі `areaIds`.
-  - Розтягує відповідний тайл з `resources/tiles` на отриману область в атласі.
-- `GET /atlas`: Повертає файл `atlas.png`.
-- `GET /atlas/info`: Повертає метадані `atlas.json`.
-
----
-
-## Фронтенд (Three.js)
-
-Знаходиться у `src/main/resources/front/index.html`.
-
-### Функціональність:
-1. **Візуалізація**: Сфера будується з окремих мешів для кожного `areaId`.
-2. **Текстурування**: Використовується `atlas.png` як єдина текстура. UV-координати кожної вершини розраховуються на основі сферичних координат (phi, theta).
-3. **Інтерактивність**:
-   - **Hover**: При наведенні на область відображається `areaId`. Якщо область належить групі, додаються `groupId` та `url`.
-   - **Click**: Якщо область має `url`, при кліку вона відкривається в новій вкладці.
-4. **Управління**: Використовується `OrbitControls` для обертання та масштабування сфери.
-
----
-
-## Як запустити
-
-1. **Вимоги**: Java 21, Gradle.
-2. **Збірка**:
-   ```bash
-   ./gradlew build
-   ```
-3. **Запуск**:
-   ```bash
-   ./gradlew bootRun
-   ```
-4. **Підготовка даних**:
-   Після запуску необхідно ініціалізувати сферу та атлас (якщо файли ще не створені):
-   - `POST http://localhost:8080/sphere`
-   - `POST http://localhost:8080/atlas`
-5. **Перегляд**:
-   Відкрийте в браузері `http://localhost:8080/`.
-
----
-
-## Конфігурація
-
-Параметри шляхів до файлів можна змінити в `src/main/resources/application.yml`:
-```yaml
-app:
-  user-areas-path: src/main/resources/user/userAreas.json
-  sphere-path: src/main/resources/sphere.json
-  atlas-png-path: src/main/resources/atlas/atlas.png
-  atlas-json-path: src/main/resources/atlas/atlas.json
-  tiles-dir-path: src/main/resources/tiles
+## Структура проекта
 ```
+src/main/java/lk/tech/testmoon/
+├── controller/          # REST контроллеры
+├── service/             # Бизнес-логика (генерация сферы, упаковка атласа)
+├── repository/          # Работа с JSON-хранилищами
+├── model/               # Сущности и модели данных
+└── config/              # Конфигурация путей и параметров
+
+src/main/resources/
+├── user/userAreas.json  # Конфигурация пользователей и групп
+├── tiles/               # Исходные изображения (тайлы)
+├── sphere/sphere.json   # Геометрия сферы (генерируется)
+├── atlas/               # Атлас (PNG, KTX2, JSON)
+├── front/index.html     # Фронтенд на Three.js
+└── application.yml      # Настройки приложения
+```
+
+## Модели данных
+
+### UserAreaConfig
+Содержит список пользователей. Каждый пользователь имеет список групп. Группа связывает `areaIds` сферы с URL и изображением `tile`.
+
+### SphereData
+Описывает геометрию сферы: радиус, сегменты и список областей (`SphereArea`).
+Каждая область содержит:
+- `vertices`: Координаты (x, y, z, phi, theta).
+- `uv`: Локальные UV-координаты [0..1].
+- `triangles`: Индексы для триангуляции.
+
+### AtlasInfo
+Метаданные атласа. Для каждой группы хранит `atlasCoords` (нормализованные [0..1]) и `atlasPixels`.
+
+## REST API
+
+### Users
+- `GET /users` — Список всех пользователей.
+- `GET /users/{userId}` — Получить пользователя.
+- `POST /users` — Создать пользователя.
+- `PUT /users/{userId}` — Обновить.
+- `DELETE /users/{userId}` — Удалить.
+
+### Groups
+- `GET /users/{userId}/groups` — Группы пользователя.
+- `POST /users/{userId}/groups` — Добавить группу.
+
+### Sphere
+- `POST /sphere` — Генерация геометрии сферы (`sphere.json`).
+- `GET /sphere` — Получение геометрии, агрегированной с данными пользователей и групп.
+
+### Atlas
+- `POST /atlas?type=ktx2` — Генерация атласа (PNG -> KTX2).
+- `GET /atlas` — Получить файл `atlas.ktx2`.
+- `GET /atlas?type=png` — Получить `atlas.png` (отладка).
+- `GET /atlas/info` — Получить `atlas.json`.
+
+## Инструкции
+
+### Запуск Backend
+1. Убедитесь, что установлена Java 21.
+2. Установите утилиту `toktx` (см. ниже).
+3. Выполните `./gradlew bootRun`.
+
+### Установка toktx
+Утилита `toktx` входит в состав [KTX-Software](https://github.com/KhronosGroup/KTX-Software/releases).
+- **Windows**: Скачайте инсталлятор `.exe`, установите и добавьте путь к `bin` в системную переменную `PATH`.
+- **Linux**: Используйте пакетный менеджер или скачайте бинарный файл.
+
+### Проверка KTX2
+Для проверки корректности файла можно использовать `ktxinfo atlas.ktx2` или онлайн-вьюверы (например, [Babylon.js Sandbox](https://sandbox.babylonjs.com/)).
+
+### Фронтенд и UV Remap
+Фронтенд на Three.js использует `KTX2Loader` для загрузки атласа. 
+Так как атлас содержит множество тайлов, для каждой области сферы применяется формула пересчета UV:
+```javascript
+uFinal = u1 + localU * (u2 - u1)
+vFinal = v1 + localV * (v2 - v1)
+```
+Где `u1, v1, u2, v2` — координаты группы в атласе из `atlas.json`, а `localU, localV` — локальные координаты вершины из `sphere.json`.
+
+## Ограничения
+- Генерация атласа требует установленной утилиты `toktx`.
+- При пересечении `areaId` в разных группах используется первое совпадение.

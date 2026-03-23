@@ -1,115 +1,182 @@
 package lk.tech.testmoon.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import lk.tech.testmoon.model.SphereArea;
-import lk.tech.testmoon.model.SphereData;
-import lk.tech.testmoon.model.UserAreaConfig;
+import lk.tech.testmoon.config.AppPathsProperties;
+import lk.tech.testmoon.model.*;
+import lk.tech.testmoon.repository.SphereRepository;
 import lk.tech.testmoon.repository.UserAreaRepository;
-import org.springframework.beans.factory.annotation.Value;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.io.File;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.*;
 
 @Service
+@RequiredArgsConstructor
+@Slf4j
 public class SphereService {
 
-    private static final int TOTAL_ROWS = 100;
-    private static final int TOTAL_COLS = 100;
-    private static final double RADIUS = 1.0;
-
-    private final ObjectMapper objectMapper;
+    private final SphereRepository sphereRepository;
     private final UserAreaRepository userAreaRepository;
-    private final String sphereFilePath;
+    private final AppPathsProperties properties;
 
-    public SphereService(UserAreaRepository userAreaRepository,
-                         @Value("${app.sphere-path:src/main/resources/sphere.json}") String sphereFilePath) {
-        this.objectMapper = new ObjectMapper();
-        this.userAreaRepository = userAreaRepository;
-        this.sphereFilePath = sphereFilePath;
-    }
+    public SphereData generateSphere() {
+        double radius = properties.getSphereRadius();
+        int latSegments = properties.getSphereLatSegments();
+        int lonSegments = properties.getSphereLonSegments();
 
-    public void generateSphere() {
+        validateInput(radius, latSegments, lonSegments);
+
         List<SphereArea> areas = new ArrayList<>();
         int areaIdCounter = 1;
 
-        for (int r = 0; r < TOTAL_ROWS; r++) {
-            for (int c = 0; c < TOTAL_COLS; c++) {
-                List<SphereArea.Vertex> vertices = new ArrayList<>();
-                double phi1 = (double) r / TOTAL_ROWS * Math.PI;
-                double phi2 = (double) (r + 1) / TOTAL_ROWS * Math.PI;
-                double theta1 = (double) c / TOTAL_COLS * 2 * Math.PI;
-                double theta2 = (double) (c + 1) / TOTAL_COLS * 2 * Math.PI;
+        double dPhi = Math.PI / latSegments;
+        double dTheta = (2 * Math.PI) / lonSegments;
 
-                vertices.add(calculateVertex(phi1, theta1));
-                vertices.add(calculateVertex(phi1, theta2));
-                vertices.add(calculateVertex(phi2, theta2));
-                vertices.add(calculateVertex(phi2, theta1));
+        for (int lat = 0; lat < latSegments; lat++) {
+            for (int lon = 0; lon < lonSegments; lon++) {
+                double phiStart = lat * dPhi;
+                double phiEnd = (lat + 1) * dPhi;
 
-                areas.add(new SphereArea(areaIdCounter++, vertices));
+                double thetaStart = lon * dTheta;
+                double thetaEnd = (lon + 1) * dTheta;
+
+                List<SphereVertex> vertices = new ArrayList<>();
+                List<SphereUv> uvs = new ArrayList<>();
+                List<Integer> triangles;
+                String type;
+
+                // Верхний полюс
+                if (lat == 0) {
+                    vertices.add(createVertex(radius, phiEnd, thetaStart));
+                    vertices.add(createVertex(radius, phiEnd, thetaEnd));
+                    vertices.add(createVertex(radius, phiStart, thetaStart)); // north pole
+
+                    uvs.add(new SphereUv(0.0, 1.0));
+                    uvs.add(new SphereUv(1.0, 1.0));
+                    uvs.add(new SphereUv(0.5, 0.0));
+
+                    triangles = List.of(0, 2, 1);
+                    type = "TRIANGLE";
+                }
+                // Нижний полюс
+                else if (lat == latSegments - 1) {
+                    vertices.add(createVertex(radius, phiStart, thetaStart));
+                    vertices.add(createVertex(radius, phiStart, thetaEnd));
+                    vertices.add(createVertex(radius, phiEnd, thetaStart)); // south pole
+
+                    uvs.add(new SphereUv(0.0, 1.0));
+                    uvs.add(new SphereUv(1.0, 1.0));
+                    uvs.add(new SphereUv(0.5, 0.0));
+
+                    triangles = List.of(0, 1, 2);
+                    type = "TRIANGLE";
+                }
+                // Средние ряды
+                else {
+                    vertices.add(createVertex(radius, phiStart, thetaStart)); // 0
+                    vertices.add(createVertex(radius, phiEnd, thetaStart));   // 1
+                    vertices.add(createVertex(radius, phiEnd, thetaEnd));     // 2
+                    vertices.add(createVertex(radius, phiStart, thetaEnd));   // 3
+
+                    uvs.add(new SphereUv(0.0, 1.0)); // 0
+                    uvs.add(new SphereUv(0.0, 0.0)); // 1
+                    uvs.add(new SphereUv(1.0, 0.0)); // 2
+                    uvs.add(new SphereUv(1.0, 1.0)); // 3
+
+                    triangles = List.of(0, 2, 1, 0, 3, 2);
+                    type = "QUAD";
+                }
+
+                areas.add(SphereArea.builder()
+                        .areaId(areaIdCounter++)
+                        .type(type)
+                        .vertices(vertices)
+                        .uv(uvs)
+                        .triangles(triangles)
+                        .build());
             }
         }
 
-        SphereData data = new SphereData();
-        data.setAreas(areas);
+        SphereData sphereData = SphereData.builder()
+                .radius(radius)
+                .latSegments(latSegments)
+                .lonSegments(lonSegments)
+                .areas(areas)
+                .build();
 
-        try {
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(new File(sphereFilePath), data);
-        } catch (IOException e) {
-            throw new RuntimeException("Could not save sphere.json", e);
+        sphereRepository.save(sphereData);
+        return sphereData;
+    }
+
+    private void validateInput(double radius, int latSegments, int lonSegments) {
+        if (radius <= 0) {
+            throw new IllegalArgumentException("radius must be > 0");
+        }
+        if (latSegments < 2) {
+            throw new IllegalArgumentException("latSegments must be >= 2");
+        }
+        if (lonSegments < 3) {
+            throw new IllegalArgumentException("lonSegments must be >= 3");
         }
     }
 
-    private SphereArea.Vertex calculateVertex(double phi, double theta) {
-        double x = RADIUS * Math.sin(phi) * Math.cos(theta);
-        double y = RADIUS * Math.cos(phi);
-        double z = RADIUS * Math.sin(phi) * Math.sin(theta);
-        return new SphereArea.Vertex(x, y, z, phi, theta);
+    private SphereVertex createVertex(double radius, double phi, double theta) {
+        double x = radius * Math.sin(phi) * Math.cos(theta);
+        double y = radius * Math.cos(phi);
+        double z = radius * Math.sin(phi) * Math.sin(theta);
+
+        return SphereVertex.builder()
+                .x(x)
+                .y(y)
+                .z(z)
+                .build();
     }
 
-    public Map<String, Object> getSphereWithUserData() {
-        SphereData sphereData;
-        try {
-            File file = new File(sphereFilePath);
-            if (!file.exists()) {
-                generateSphere();
-            }
-            sphereData = objectMapper.readValue(file, SphereData.class);
-        } catch (IOException e) {
-            throw new RuntimeException("Could not read sphere.json", e);
+    public SphereData getSphereData() {
+        SphereData sphere = sphereRepository.find();
+        if (sphere == null) {
+            throw new IllegalStateException("sphere.json not found");
         }
 
-        UserAreaConfig userConfig = userAreaRepository.read();
-        
-        // Flatten user groups to map areaId -> group info
-        Map<Integer, Map<String, Object>> areaToGroupMap = (userConfig.getUsers() == null ? new ArrayList<lk.tech.testmoon.model.User>() : userConfig.getUsers()).stream()
-                .flatMap(u -> (u.getGroups() == null ? new ArrayList<lk.tech.testmoon.model.UserGroup>() : u.getGroups()).stream().map(g -> Map.entry(u.getUserId(), g)))
-                .flatMap(entry -> entry.getValue().getAreaIds().stream()
-                        .map(areaId -> {
-                            Map<String, Object> data = new java.util.HashMap<>();
-                            data.put("userId", entry.getKey());
-                            data.put("groupId", entry.getValue().getGroupId());
-                            data.put("url", entry.getValue().getUrl());
-                            data.put("tile", entry.getValue().getTile());
-                            return Map.entry(areaId, data);
-                        }))
-                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue, (v1, v2) -> v1));
+        UserAreaConfig userConfig = userAreaRepository.findAll();
 
-        return Map.of(
-                "areas", sphereData.getAreas().stream().map(area -> {
-                    Map<String, Object> areaMap = new java.util.HashMap<>(Map.of(
-                            "areaId", area.getAreaId(),
-                            "vertices", area.getVertices()
-                    ));
-                    if (areaToGroupMap.containsKey(area.getAreaId())) {
-                        areaMap.putAll(areaToGroupMap.get(area.getAreaId()));
+        Map<Integer, UserGroupInfo> areaMap = new HashMap<>();
+        if (userConfig != null && userConfig.getUsers() != null) {
+            for (User user : userConfig.getUsers()) {
+                if (user.getGroups() == null) {
+                    continue;
+                }
+                for (UserGroup group : user.getGroups()) {
+                    if (group.getAreaIds() == null) {
+                        continue;
                     }
-                    return areaMap;
-                }).toList()
-        );
+                    for (Integer areaId : group.getAreaIds()) {
+                        if (areaMap.containsKey(areaId)) {
+                            log.warn("AreaId {} is assigned to multiple groups. Using the first match.", areaId);
+                            continue;
+                        }
+                        areaMap.put(areaId, new UserGroupInfo(user.getUserId(), group.getGroupId(), group.getUrl()));
+                    }
+                }
+            }
+        }
+
+        for (SphereArea area : sphere.getAreas()) {
+            UserGroupInfo info = areaMap.get(area.getAreaId());
+
+            if (info == null) {
+                throw new IllegalStateException(
+                        "Area " + area.getAreaId() + " has no group mapping"
+                );
+            }
+
+            area.setUserId(info.userId);
+            area.setGroupId(info.groupId);
+            area.setUrl(info.url);
+        }
+
+        return sphere;
     }
+
+    private record UserGroupInfo(Long userId, Long groupId, String url) {}
 }

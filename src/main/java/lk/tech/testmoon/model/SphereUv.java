@@ -1,14 +1,15 @@
 package lk.tech.testmoon.model;
 
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-import java.util.List;
 
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class User {
-    private Long userId;
-    private List<UserGroup> groups;
+@Builder
+public class SphereUv {
+    private Double u;
+    private Double v;
 }

@@ -1,41 +1,39 @@
 package lk.tech.testmoon.repository;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import lk.tech.testmoon.config.AppPathsProperties;
 import lk.tech.testmoon.model.UserAreaConfig;
-import org.springframework.beans.factory.annotation.Value;
+import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Repository;
 
 import java.io.File;
 import java.io.IOException;
 
 @Repository
+@RequiredArgsConstructor
 public class UserAreaRepository {
-
+    private final AppPathsProperties paths;
     private final ObjectMapper objectMapper;
-    private final String filePath;
 
-    public UserAreaRepository(@Value("${app.user-areas-path:src/main/resources/user/userAreas.json}") String filePath) {
-        this.objectMapper = new ObjectMapper();
-        this.filePath = filePath;
-    }
-
-    public UserAreaConfig read() {
+    public UserAreaConfig findAll() {
         try {
-            File file = new File(filePath);
+            File file = new File(paths.getUserAreasPath());
             if (!file.exists()) {
                 return new UserAreaConfig();
             }
             return objectMapper.readValue(file, UserAreaConfig.class);
         } catch (IOException e) {
-            throw new RuntimeException("Could not read user areas file", e);
+            throw new RuntimeException("Error reading user areas JSON", e);
         }
     }
 
-    public void write(UserAreaConfig config) {
+    public void save(UserAreaConfig config) {
         try {
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(new File(filePath), config);
+            File file = new File(paths.getUserAreasPath());
+            file.getParentFile().mkdirs();
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(file, config);
         } catch (IOException e) {
-            throw new RuntimeException("Could not write user areas file", e);
+            throw new RuntimeException("Error saving user areas JSON", e);
         }
     }
 }

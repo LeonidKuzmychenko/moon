@@ -1,30 +1,26 @@
 package lk.tech.testmoon.controller;
 
+import lk.tech.testmoon.model.SphereData;
 import lk.tech.testmoon.service.SphereService;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import java.util.Map;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/sphere")
+@RequiredArgsConstructor
+@CrossOrigin(origins = "*")
 public class SphereController {
-
     private final SphereService sphereService;
 
-    public SphereController(SphereService sphereService) {
-        this.sphereService = sphereService;
-    }
-
     @PostMapping
-    public void generateSphere() {
+    public ResponseEntity<String> generateSphere() {
         sphereService.generateSphere();
+        return ResponseEntity.ok("Sphere generated");
     }
 
     @GetMapping
-    public Map<String, Object> getSphere() {
-        return sphereService.getSphereWithUserData();
+    public SphereData getSphere() {
+        return sphereService.getSphereData();
     }
 }

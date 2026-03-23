@@ -7,10 +7,16 @@ spring:
 
 app:
   user-areas-path: src/main/resources/user/userAreas.json
-  sphere-path: src/main/resources/sphere.json
+  sphere-path: src/main/resources/sphere/sphere.json
   atlas-png-path: src/main/resources/atlas/atlas.png
+  atlas-ktx2-path: src/main/resources/atlas/atlas.ktx2
   atlas-json-path: src/main/resources/atlas/atlas.json
   tiles-dir-path: src/main/resources/tiles
+  atlas-size: 1024
+  atlas-padding: 4
+  sphere-radius: 1.0
+  sphere-lat-segments: 3
+  sphere-lon-segments: 3
 
 server:
   port: 8080

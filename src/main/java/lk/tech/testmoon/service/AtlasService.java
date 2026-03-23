@@ -1,227 +1,243 @@
 package lk.tech.testmoon.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import lk.tech.testmoon.config.AppPathsProperties;
 import lk.tech.testmoon.model.*;
+import lk.tech.testmoon.repository.AtlasRepository;
 import lk.tech.testmoon.repository.UserAreaRepository;
-import org.springframework.beans.factory.annotation.Value;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.util.List;
 import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
 
 @Service
+@RequiredArgsConstructor
+@Slf4j
 public class AtlasService {
 
-    private final ObjectMapper objectMapper;
+    private final AtlasRepository atlasRepository;
     private final UserAreaRepository userAreaRepository;
-    private final String sphereFilePath;
-    private final String atlasPngPath;
-    private final String atlasJsonPath;
-    private final String tilesDirPath;
+    private final AppPathsProperties properties;
 
-    //16k
-    private static final int ATLAS_WIDTH = 15360;
-    private static final int ATLAS_HEIGHT = 8640;
+    private static final int PADDING = 4;
+    private static final int VERSION = 2;
 
-    //8k 7680x4320
-//    private static final int ATLAS_WIDTH = 7680;
-//    private static final int ATLAS_HEIGHT = 4320;
+    public void generateAtlas(String type) {
+        int atlasSize = properties.getAtlasSize();
+        int tileSize = properties.getAtlasTileSize(); // <-- НОВОЕ
 
-    //4k 3840x2160
-//    private static final int ATLAS_WIDTH = 3840;
-//    private static final int ATLAS_HEIGHT = 2160;
-
-    public AtlasService(UserAreaRepository userAreaRepository,
-                        @Value("${app.sphere-path:src/main/resources/sphere.json}") String sphereFilePath,
-                        @Value("${app.atlas-png-path:src/main/resources/atlas/atlas.png}") String atlasPngPath,
-                        @Value("${app.atlas-json-path:src/main/resources/atlas/atlas.json}") String atlasJsonPath,
-                        @Value("${app.tiles-dir-path:src/main/resources/tiles}") String tilesDirPath) {
-        this.objectMapper = new ObjectMapper();
-        this.userAreaRepository = userAreaRepository;
-        this.sphereFilePath = sphereFilePath;
-        this.atlasPngPath = atlasPngPath;
-        this.atlasJsonPath = atlasJsonPath;
-        this.tilesDirPath = tilesDirPath;
-    }
-
-    public void generateAtlas() {
-        SphereData sphereData;
-        try {
-            sphereData = objectMapper.readValue(new File(sphereFilePath), SphereData.class);
-        } catch (IOException e) {
-            throw new RuntimeException("Could not read sphere.json", e);
+        if (atlasSize <= 0 || tileSize <= 0) {
+            throw new IllegalArgumentException("atlasSize/tileSize must be > 0");
         }
 
-        UserAreaConfig userConfig = userAreaRepository.read();
-        if (userConfig.getUsers() == null) return;
-
-        BufferedImage atlas = new BufferedImage(ATLAS_WIDTH, ATLAS_HEIGHT, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2d = atlas.createGraphics();
-        
-        // Quality rendering hints for sharper edges
-        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
-        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-        g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        g2d.setRenderingHint(RenderingHints.KEY_COLOR_RENDERING, RenderingHints.VALUE_COLOR_RENDER_QUALITY);
-        
-        // Fill background with white tile if available, otherwise solid white
-        try {
-            File whiteTileFile = new File(tilesDirPath, "white.jpg");
-            if (whiteTileFile.exists()) {
-                BufferedImage whiteTile = ImageIO.read(whiteTileFile);
-                g2d.drawImage(whiteTile, 0, 0, ATLAS_WIDTH, ATLAS_HEIGHT, null);
-            } else {
-                g2d.setColor(Color.WHITE);
-                g2d.fillRect(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
-            }
-        } catch (IOException e) {
-            g2d.setColor(Color.WHITE);
-            g2d.fillRect(0, 0, ATLAS_WIDTH, ATLAS_HEIGHT);
+        UserAreaConfig config = userAreaRepository.findAll();
+        if (config == null || config.getUsers() == null) {
+            throw new IllegalStateException("userAreas.json is empty");
         }
 
-        List<Map<String, Object>> atlasInfo = new ArrayList<>();
+        BufferedImage atlas = new BufferedImage(
+                atlasSize,
+                atlasSize,
+                BufferedImage.TYPE_INT_RGB
+        );
 
-        // Draw user groups
-        for (User user : userConfig.getUsers()) {
-            if (user.getGroups() == null) continue;
-            for (UserGroup group : user.getGroups()) {
-                if (group.getAreaIds() == null || group.getAreaIds().isEmpty()) continue;
+        Graphics2D g = atlas.createGraphics();
 
-                List<SphereArea> groupAreas = new ArrayList<>();
-                for (Integer areaId : group.getAreaIds()) {
-                    sphereData.getAreas().stream()
-                            .filter(a -> a.getAreaId() == areaId)
-                            .findFirst()
-                            .ifPresent(groupAreas::add);
-                }
+        try {
+            g.setColor(Color.BLACK);
+            g.fillRect(0, 0, atlasSize, atlasSize);
 
-                if (groupAreas.isEmpty()) continue;
+            g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
 
-                try {
-                    File tileFile = new File(tilesDirPath, group.getTile());
-                    if (tileFile.exists()) {
-                        BufferedImage tileImg = ImageIO.read(tileFile);
-                        drawAreasOnAtlas(g2d, groupAreas, tileImg, group.getGroupId(), atlasInfo);
+            List<AtlasGroupInfo> groups = new ArrayList<>();
+
+            int x = PADDING;
+            int y = PADDING;
+            int rowHeight = tileSize;
+
+            for (User user : config.getUsers()) {
+                if (user.getGroups() == null) continue;
+
+                for (UserGroup group : user.getGroups()) {
+
+                    BufferedImage original = loadTile(group.getTile());
+                    BufferedImage tile = resizeTile(original, tileSize);
+
+                    int w = tileSize;
+                    int h = tileSize;
+
+                    // перенос строки
+                    if (x + w + PADDING > atlasSize) {
+                        x = PADDING;
+                        y += rowHeight + PADDING;
                     }
-                } catch (IOException e) {
-                    System.err.println("Could not read tile image: " + group.getTile());
+
+                    if (y + h + PADDING > atlasSize) {
+                        throw new IllegalStateException("Atlas overflow");
+                    }
+
+                    g.drawImage(tile, x, y, null);
+
+                    AtlasPixels pixels = AtlasPixels.builder()
+                            .x(x)
+                            .y(y)
+                            .width(w)
+                            .height(h)
+                            .build();
+
+                    // bottom-left UV
+                    double u1 = (double) x / atlasSize;
+                    double u2 = (double) (x + w) / atlasSize;
+
+                    double v1 = (double) (atlasSize - (y + h)) / atlasSize;
+                    double v2 = (double) (atlasSize - y) / atlasSize;
+
+                    AtlasCoords coords = AtlasCoords.builder()
+                            .u1(u1)
+                            .v1(v1)
+                            .u2(u2)
+                            .v2(v2)
+                            .build();
+
+                    validateCoords(coords);
+
+                    groups.add(
+                            AtlasGroupInfo.builder()
+                                    .groupId(group.getGroupId())
+                                    .tile(group.getTile())
+                                    .atlasCoords(coords)
+                                    .atlasPixels(pixels)
+                                    .build()
+                    );
+
+                    x += w + PADDING;
                 }
             }
-        }
 
-        g2d.dispose();
+            g.dispose();
 
-        try {
-            ImageIO.write(atlas, "png", new File(atlasPngPath));
-            objectMapper.writerWithDefaultPrettyPrinter().writeValue(new File(atlasJsonPath), atlasInfo);
-        } catch (IOException e) {
-            throw new RuntimeException("Could not save atlas files", e);
+            saveAtlasPng(atlas);
+
+            AtlasInfo info = AtlasInfo.builder()
+                    .atlasWidth(atlasSize)
+                    .atlasHeight(atlasSize)
+                    .padding(PADDING)
+                    .version(VERSION)
+                    .groups(groups)
+                    .build();
+
+            atlasRepository.saveInfo(info);
+
+            if ("ktx2".equalsIgnoreCase(type)) {
+                convertToKtx2();
+            }
+
+        } finally {
+            atlas.flush();
         }
     }
 
-    private void drawAreasOnAtlas(Graphics2D g2d, List<SphereArea> areas, BufferedImage tileImg, Long groupId, List<Map<String, Object>> atlasInfo) {
-        double minPhi = Double.MAX_VALUE;
-        double maxPhi = Double.MIN_VALUE;
-        List<Double> thetas = new ArrayList<>();
+    private BufferedImage resizeTile(BufferedImage src, int size) {
+        BufferedImage resized = new BufferedImage(size, size, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = resized.createGraphics();
 
-        for (SphereArea area : areas) {
-            for (SphereArea.Vertex v : area.getVertices()) {
-                double phi = v.getPhi();
-                double theta = v.getTheta();
-                
-                minPhi = Math.min(minPhi, phi);
-                maxPhi = Math.max(maxPhi, phi);
-                thetas.add(theta);
+        g.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        g.drawImage(src, 0, 0, size, size, null);
+
+        g.dispose();
+        return resized;
+    }
+
+    private BufferedImage loadTile(String tileName) {
+        try {
+            File file = new File(properties.getTilesDirPath(), tileName);
+
+            if (!file.exists()) {
+                return fallbackTile();
             }
-        }
 
-        if (thetas.isEmpty()) return;
+            BufferedImage img = ImageIO.read(file);
+            return img != null ? img : fallbackTile();
 
-        thetas.sort(Double::compare);
-        
-        double largestGap = 0;
-        int largestGapIndex = -1;
-        double minTheta;
-        double maxTheta;
-
-        for (int i = 0; i < thetas.size(); i++) {
-            double t1 = thetas.get(i);
-            double t2 = thetas.get((i + 1) % thetas.size());
-            double gap = (t2 - t1 + 2 * Math.PI) % (2 * Math.PI);
-            if (gap > largestGap) {
-                largestGap = gap;
-                largestGapIndex = i;
-            }
-        }
-
-        if (largestGap > Math.PI) {
-            if (largestGapIndex == thetas.size() - 1) {
-                minTheta = thetas.get(0);
-                maxTheta = thetas.get(thetas.size() - 1);
-            } else {
-                minTheta = thetas.get(largestGapIndex + 1);
-                maxTheta = thetas.get(largestGapIndex) + 2 * Math.PI;
-            }
-        } else {
-            minTheta = thetas.get(0);
-            maxTheta = thetas.get(thetas.size() - 1);
-            if (largestGap < 0.2 && (maxTheta - minTheta) > 1.8 * Math.PI) {
-                minTheta = 0;
-                maxTheta = 2 * Math.PI;
-            }
-        }
-
-        double x_double = (minTheta / (2 * Math.PI) * ATLAS_WIDTH);
-        double y_double = (minPhi / Math.PI * ATLAS_HEIGHT);
-        double x_end_double = (maxTheta / (2 * Math.PI) * ATLAS_WIDTH);
-        double y_end_double = (maxPhi / Math.PI * ATLAS_HEIGHT);
-
-        int x = (int) Math.round(x_double);
-        int y = (int) Math.round(y_double);
-        int x_end = (int) Math.round(x_end_double);
-        int y_end = (int) Math.round(y_end_double);
-
-        int w = x_end - x;
-        int h = y_end - y;
-
-        if (w <= 0) w = 1;
-        if (h <= 0) h = 1;
-
-        int drawX = x % ATLAS_WIDTH;
-        if (drawX < 0) drawX += ATLAS_WIDTH;
-
-        g2d.drawImage(tileImg, drawX, y, w, h, null);
-        if (drawX + w > ATLAS_WIDTH) {
-            g2d.drawImage(tileImg, drawX - ATLAS_WIDTH, y, w, h, null);
-        }
-        
-        if (groupId != null && atlasInfo != null) {
-            Map<String, Object> info = new HashMap<>();
-            info.put("groupId", groupId);
-            info.put("atlasCoords", Map.of("x", drawX, "y", y, "w", w, "h", h));
-            atlasInfo.add(info);
+        } catch (Exception e) {
+            log.warn("Failed to load tile: {}", tileName, e);
+            return fallbackTile();
         }
     }
 
-    public byte[] getAtlasPng() {
-        try {
-            return Files.readAllBytes(new File(atlasPngPath).toPath());
-        } catch (IOException e) {
-            throw new RuntimeException("Could not read atlas.png", e);
+    private BufferedImage fallbackTile() {
+        BufferedImage img = new BufferedImage(256, 256, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        g.setColor(Color.MAGENTA);
+        g.fillRect(0, 0, 256, 256);
+        g.dispose();
+        return img;
+    }
+
+    private void validateCoords(AtlasCoords c) {
+        if (c.getU1() < 0 || c.getV1() < 0 ||
+                c.getU2() > 1 || c.getV2() > 1 ||
+                c.getU1() >= c.getU2() ||
+                c.getV1() >= c.getV2()) {
+            throw new IllegalStateException("Invalid atlas coords");
         }
     }
 
-    public List<Map<String, Object>> getAtlasJson() {
+    private void saveAtlasPng(BufferedImage atlas) {
         try {
-            return objectMapper.readValue(new File(atlasJsonPath), List.class);
-        } catch (IOException e) {
-            throw new RuntimeException("Could not read atlas.json", e);
+            File file = new File(properties.getAtlasPngPath());
+            file.getParentFile().mkdirs();
+
+            ImageIO.write(atlas, "png", file);
+
+            if (!file.exists() || file.length() == 0) {
+                throw new IllegalStateException("atlas.png not created");
+            }
+
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to save atlas.png", e);
         }
+    }
+
+    private void convertToKtx2() {
+        try {
+            ProcessBuilder pb = new ProcessBuilder(
+                    "toktx",
+                    "--t2",
+                    "--genmipmap",
+                    "--bcmp",
+                    "--clevel", "3",
+                    properties.getAtlasKtx2Path(),
+                    properties.getAtlasPngPath()
+            );
+
+            pb.inheritIO();
+
+            Process p = pb.start();
+            int exit = p.waitFor();
+
+            if (exit != 0) {
+                throw new RuntimeException("toktx failed");
+            }
+
+        } catch (Exception e) {
+            throw new RuntimeException("KTX2 conversion failed", e);
+        }
+    }
+
+    public File getAtlasFile(String type) {
+        if ("png".equalsIgnoreCase(type)) {
+            return new File(properties.getAtlasPngPath());
+        }
+        return new File(properties.getAtlasKtx2Path());
+    }
+
+    public AtlasInfo getAtlasInfo() {
+        return atlasRepository.findInfo();
     }
 }

@@ -6,8 +6,8 @@ def generate():
     tiles_dir = r'c:\IntelijIdeaProjects\test-parsing\test-moon\src\main\resources\tiles'
     tiles = [f for f in os.listdir(tiles_dir) if f.endswith(('.jpg', '.png', '.jpeg'))]
     
-    total_areas = 1600
-    num_users = 150
+    total_areas = 9
+    num_users = 3
     
     # Each user gets total_areas / num_users groups
     groups_per_user = total_areas // num_users

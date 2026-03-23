@@ -1,26 +1,26 @@
 package lk.tech.testmoon.model;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
+import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
-
 import java.util.List;
 
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@Builder
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class SphereArea {
-    private int areaId;
-    private List<Vertex> vertices;
-
-    @Data
-    @NoArgsConstructor
-    @AllArgsConstructor
-    public static class Vertex {
-        private double x;
-        private double y;
-        private double z;
-        private double phi;
-        private double theta;
-    }
+    private Integer areaId;
+    private String type;
+    private List<SphereVertex> vertices;
+    private List<SphereUv> uv;
+    private List<Integer> triangles;
+    
+    // Additional fields for GET /sphere aggregation
+    private Long groupId;
+    private Long userId;
+    private String url;
 }

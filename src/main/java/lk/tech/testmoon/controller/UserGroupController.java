@@ -2,7 +2,7 @@ package lk.tech.testmoon.controller;
 
 import lk.tech.testmoon.model.UserGroup;
 import lk.tech.testmoon.service.UserGroupService;
-import org.springframework.http.HttpStatus;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -10,17 +10,14 @@ import java.util.List;
 
 @RestController
 @RequestMapping("/users/{userId}/groups")
+@RequiredArgsConstructor
+@CrossOrigin(origins = "*")
 public class UserGroupController {
-
     private final UserGroupService userGroupService;
 
-    public UserGroupController(UserGroupService userGroupService) {
-        this.userGroupService = userGroupService;
-    }
-
     @GetMapping
-    public List<UserGroup> getGroupsForUser(@PathVariable Long userId) {
-        return userGroupService.getGroupsForUser(userId);
+    public List<UserGroup> getGroupsByUserId(@PathVariable Long userId) {
+        return userGroupService.getGroupsByUserId(userId);
     }
 
     @GetMapping("/{groupId}")
@@ -31,19 +28,18 @@ public class UserGroupController {
     }
 
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
     public UserGroup createGroup(@PathVariable Long userId, @RequestBody UserGroup group) {
         return userGroupService.createGroup(userId, group);
     }
 
     @PutMapping("/{groupId}")
-    public UserGroup updateGroup(@PathVariable Long userId, @PathVariable Long groupId, @RequestBody UserGroup group) {
-        return userGroupService.updateGroup(userId, groupId, group);
+    public ResponseEntity<UserGroup> updateGroup(@PathVariable Long userId, @PathVariable Long groupId, @RequestBody UserGroup group) {
+        UserGroup updated = userGroupService.updateGroup(userId, groupId, group);
+        return updated != null ? ResponseEntity.ok(updated) : ResponseEntity.notFound().build();
     }
 
     @DeleteMapping("/{groupId}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void deleteGroup(@PathVariable Long userId, @PathVariable Long groupId) {
-        userGroupService.deleteGroup(userId, groupId);
+    public ResponseEntity<Void> deleteGroup(@PathVariable Long userId, @PathVariable Long groupId) {
+        return userGroupService.deleteGroup(userId, groupId) ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 }

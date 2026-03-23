@@ -8,6 +8,14 @@ group = 'lk.tech'
 version = '0.0.1-SNAPSHOT'
 description = 'test-moon'
 
+bootJar {
+    mainClass = 'lk.tech.testmoon.SphereApplication'
+}
+
+springBoot {
+    mainClass = 'lk.tech.testmoon.SphereApplication'
+}
+
 java {
     toolchain {
         languageVersion = JavaLanguageVersion.of(21)
