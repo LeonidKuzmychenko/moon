@@ -7,6 +7,12 @@
           "groupId": 1,
           "url": "https://google.com",
           "tile": "tile1.jpg",
+          "areaIds": [249]
+        },
+        {
+          "groupId": 1,
+          "url": "https://google.com",
+          "tile": "tile1.jpg",
           "areaIds": [250]
         }
       ]
@@ -17,8 +23,8 @@
         {
           "groupId": 3,
           "url": "https://google.com",
-          "tile": "white.jpg",
-          "areaIds": [4]
+          "tile": "tile2.jpg",
+          "areaIds": [1095]
         }
       ]
     }
