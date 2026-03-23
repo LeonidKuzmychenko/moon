@@ -104,9 +104,8 @@
                 alphaTest: 0.1
             });
             
-            const wireMaterial = new THREE.MeshBasicMaterial({ 
+            const lineMaterial = new THREE.LineBasicMaterial({ 
                 color: 0x444444, 
-                wireframe: true,
                 transparent: true,
                 opacity: 0.3
             });
@@ -146,9 +145,11 @@
                     userId: area.userId
                 };
                 
-                // Add a wireframe helper
-                const wireframe = new THREE.Mesh(geometry, wireMaterial);
-                mesh.add(wireframe);
+                // Add a perimeter helper (no diagonals)
+                const lineGeometry = new THREE.BufferGeometry();
+                lineGeometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+                const lineLoop = new THREE.LineLoop(lineGeometry, lineMaterial);
+                mesh.add(lineLoop);
 
                 sphereGroup.add(mesh);
                 areas.push(mesh);
